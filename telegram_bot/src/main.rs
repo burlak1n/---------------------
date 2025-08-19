@@ -59,6 +59,8 @@ enum Command {
     StartInterview,
     #[command(description = "Get contact information.")]
     Contact,
+    #[command(description = "Reschedule your interview.")]
+    Reschedule,
 }
 
 async fn command_handler(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
@@ -66,11 +68,11 @@ async fn command_handler(bot: Bot, msg: Message, cmd: Command) -> ResponseResult
         Command::Help => {
             bot.send_message(msg.chat.id, Command::descriptions().to_string()).await?;
         }
-        Command::StartInterview => {
+        Command::StartInterview | Command::Reschedule => {
             let keyboard = InlineKeyboardMarkup::new(vec![vec![
                 InlineKeyboardButton::new("Sign Up", InlineKeyboardButtonKind::CallbackData("sign_up".to_string())),
             ]]);
-            bot.send_message(msg.chat.id, "Sign up for interviews!").reply_markup(keyboard).await?;
+            bot.send_message(msg.chat.id, "Please choose a new slot.").reply_markup(keyboard).await?;
         }
         Command::Contact => {
             let text = match env::var("CONTACT_USERNAME") {
