@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::env;
 use std::fs;
 use std::sync::Arc;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardButtonKind, InlineKeyboardMarkup};
@@ -56,6 +57,8 @@ enum Command {
     Help,
     #[command(description = "Start the interview booking process.")]
     StartInterview,
+    #[command(description = "Get contact information.")]
+    Contact,
 }
 
 async fn command_handler(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
@@ -68,6 +71,13 @@ async fn command_handler(bot: Bot, msg: Message, cmd: Command) -> ResponseResult
                 InlineKeyboardButton::new("Sign Up", InlineKeyboardButtonKind::CallbackData("sign_up".to_string())),
             ]]);
             bot.send_message(msg.chat.id, "Sign up for interviews!").reply_markup(keyboard).await?;
+        }
+        Command::Contact => {
+            let text = match env::var("CONTACT_USERNAME") {
+                Ok(username) => format!("For questions, please contact: https://t.me/{}", username),
+                Err(_) => "Contact information is not configured.".to_string(),
+            };
+            bot.send_message(msg.chat.id, text).await?;
         }
     };
     Ok(())
@@ -172,12 +182,11 @@ async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str, channel
         let date = parts[1];
         let time = parts[2];
 
-        // Find the location for the event payload
         let location = slots.iter()
             .find(|d| d.date == date)
             .and_then(|d| d.slots.iter().find(|s| s.time == time))
             .map(|s| s.location.as_str())
-            .unwrap_or(""); // Default to empty string if not found
+            .unwrap_or("");
 
         if let Some(msg) = &q.message {
             let text = format!("Success! Your booking is confirmed for {} at {}.\nUse /reschedule to change your slot.", date, time);
@@ -198,7 +207,7 @@ async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str, channel
                 Ok(p) => p.as_bytes().to_vec(),
                 Err(e) => {
                     tracing::error!("Failed to serialize booking event: {}", e);
-                    return Ok(()); // Or handle error appropriately
+                    return Ok(())
                 }
             };
 
