@@ -55,8 +55,8 @@ fn load_allowed_users() -> Result<Vec<u64>, Box<dyn std::error::Error>> {
 enum Command {
     #[command(description = "Display this text.")]
     Help,
-    #[command(description = "Start the interview booking process.")]
-    StartInterview,
+    #[command(description = "Start or restart the booking process.")]
+    Start,
     #[command(description = "Get contact information.")]
     Contact,
     #[command(description = "Reschedule your interview.")]
@@ -68,7 +68,7 @@ async fn command_handler(bot: Bot, msg: Message, cmd: Command) -> ResponseResult
         Command::Help => {
             bot.send_message(msg.chat.id, Command::descriptions().to_string()).await?;
         }
-        Command::StartInterview | Command::Reschedule => {
+        Command::Start | Command::Reschedule => {
             let keyboard = InlineKeyboardMarkup::new(vec![vec![
                 InlineKeyboardButton::new("Sign Up", InlineKeyboardButtonKind::CallbackData("sign_up".to_string())),
             ]]);
@@ -233,6 +233,17 @@ async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str, channel
     Ok(())
 }
 
+async fn notification_scheduler(_bot: Bot) {
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+    loop {
+        interval.tick().await;
+        // TODO: Implement notification logic
+        // 1. Get the current time in MSK timezone (requires a crate like chrono-tz).
+        // 2. Check if the time is 11:00 AM.
+        // 3. Access persistent storage of bookings (e.g., Redis or a database).
+        // 4. Iterate through today's bookings and send reminders.
+    }
+}
 
 #[tokio::main]
 async fn main() -> LapinResult<()> {
@@ -257,7 +268,7 @@ async fn main() -> LapinResult<()> {
         QueueDeclareOptions::default(),
         FieldTable::default(),
     ).await?;
-    tracing::info!("Declared queue '{}'", queue_name);
+    tracing::info!("Declared queue 'admin.booking.event'");
 
 
     let bot = Bot::from_env();
@@ -266,13 +277,15 @@ async fn main() -> LapinResult<()> {
         .branch(Update::filter_message().filter_command::<Command>().endpoint(command_handler))
         .branch(Update::filter_callback_query().endpoint(callback_handler));
 
-    Dispatcher::builder(bot, handler)
+    let mut dispatcher = Dispatcher::builder(bot.clone(), handler)
         .dependencies(dptree::deps![allowed_users, available_slots, Arc::new(channel)])
         .enable_ctrlc_handler()
-        .build()
-        .dispatch()
-        .await;
+        .build();
 
-    tracing::info!("Bot has stopped.");
+    tokio::select! {
+        _ = dispatcher.dispatch() => {},
+        _ = notification_scheduler(bot) => {},
+    }
+
     Ok(())
 }
