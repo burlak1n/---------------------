@@ -1,10 +1,12 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::sync::Arc;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardButtonKind, InlineKeyboardMarkup};
 use teloxide::{prelude::*, utils::command::BotCommands};
+use lapin::{Connection, ConnectionProperties, Result as LapinResult, options::*, types::FieldTable, BasicProperties, Channel};
+use chrono::Utc;
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct Slot {
     time: String,
     location: String,
@@ -12,10 +14,27 @@ struct Slot {
     booked_users: Vec<u64>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct SlotDate {
     date: String,
     slots: Vec<Slot>,
+}
+
+#[derive(Debug, Serialize)]
+struct BookingEvent<'a> {
+    event_type: &'a str,
+    user_telegram_id: u64,
+    timestamp: String,
+    payload: BookingPayload<'a>,
+}
+
+#[derive(Debug, Serialize)]
+struct BookingPayload<'a> {
+    old_date: Option<&'a str>,
+    old_time: Option<&'a str>,
+    new_date: &'a str,
+    new_time: &'a str,
+    location: &'a str,
 }
 
 fn load_available_slots() -> Result<Vec<SlotDate>, Box<dyn std::error::Error>> {
@@ -59,6 +78,7 @@ async fn callback_handler(
     bot: Bot,
     slots: Arc<Vec<SlotDate>>,
     allowed_users: Arc<Vec<u64>>,
+    channel: Arc<Channel>,
 ) -> ResponseResult<()> {
     if !allowed_users.contains(&q.from.id.0) {
         bot.answer_callback_query(q.id.clone())
@@ -74,7 +94,7 @@ async fn callback_handler(
         } else if data.starts_with("book_") {
             handle_slot_selection(&q, bot, data).await?;
         } else if data.starts_with("confirm_") {
-            handle_confirm_booking(&q, bot, data).await?;
+            handle_confirm_booking(&q, bot, data, channel, slots).await?;
         }
     }
 
@@ -144,7 +164,7 @@ async fn handle_slot_selection(q: &CallbackQuery, bot: Bot, data: &str) -> Respo
     Ok(())
 }
 
-async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str) -> ResponseResult<()> {
+async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str, channel: Arc<Channel>, slots: Arc<Vec<SlotDate>>) -> ResponseResult<()> {
     bot.answer_callback_query(q.id.clone()).await?;
 
     let parts: Vec<&str> = data.split('_').collect();
@@ -152,10 +172,47 @@ async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str) -> Resp
         let date = parts[1];
         let time = parts[2];
 
+        // Find the location for the event payload
+        let location = slots.iter()
+            .find(|d| d.date == date)
+            .and_then(|d| d.slots.iter().find(|s| s.time == time))
+            .map(|s| s.location.as_str())
+            .unwrap_or(""); // Default to empty string if not found
+
         if let Some(msg) = &q.message {
             let text = format!("Success! Your booking is confirmed for {} at {}.\nUse /reschedule to change your slot.", date, time);
             
-            // Edit the message to show success and remove the keyboard
+            let event = BookingEvent {
+                event_type: "booking.created",
+                user_telegram_id: q.from.id.0,
+                timestamp: Utc::now().to_rfc3339(),
+                payload: BookingPayload {
+                    old_date: None,
+                    old_time: None,
+                    new_date: date,
+                    new_time: time,
+                    location,
+                },
+            };
+            let payload = match serde_json::to_string(&event) {
+                Ok(p) => p.as_bytes().to_vec(),
+                Err(e) => {
+                    tracing::error!("Failed to serialize booking event: {}", e);
+                    return Ok(()); // Or handle error appropriately
+                }
+            };
+
+            match channel.basic_publish(
+                "",
+                "admin.booking.event",
+                BasicPublishOptions::default(),
+                &payload,
+                BasicProperties::default()
+            ).await {
+                Ok(_) => tracing::info!("Published booking event for user {}", q.from.id),
+                Err(e) => tracing::error!("Failed to publish booking event: {}", e),
+            };
+
             bot.edit_message_text(msg.chat().id, msg.id(), text)
                 .reply_markup(InlineKeyboardMarkup::new(vec![vec![]]))
                 .await?;
@@ -167,7 +224,7 @@ async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str) -> Resp
 
 
 #[tokio::main]
-async fn main() {
+async fn main() -> LapinResult<()> {
     dotenvy::dotenv().expect(".env file not found");
     tracing_subscriber::fmt::init();
     tracing::info!("Starting interview booking bot...");
@@ -178,6 +235,20 @@ async fn main() {
     tracing::info!("Loaded {} allowed users", allowed_users.len());
     tracing::info!("Loaded {} dates with slots", available_slots.len());
 
+    let addr = "amqp://guest:guest@localhost:5672/%2f";
+    let conn = Connection::connect(addr, ConnectionProperties::default()).await?;
+    tracing::info!("Connected to RabbitMQ");
+    let channel = conn.create_channel().await?;
+    
+    let queue_name = "admin.booking.event";
+    channel.queue_declare(
+        queue_name,
+        QueueDeclareOptions::default(),
+        FieldTable::default(),
+    ).await?;
+    tracing::info!("Declared queue '{}'", queue_name);
+
+
     let bot = Bot::from_env();
 
     let handler = dptree::entry()
@@ -185,11 +256,12 @@ async fn main() {
         .branch(Update::filter_callback_query().endpoint(callback_handler));
 
     Dispatcher::builder(bot, handler)
-        .dependencies(dptree::deps![allowed_users, available_slots])
+        .dependencies(dptree::deps![allowed_users, available_slots, Arc::new(channel)])
         .enable_ctrlc_handler()
         .build()
         .dispatch()
         .await;
 
     tracing::info!("Bot has stopped.");
+    Ok(())
 }
