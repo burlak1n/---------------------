@@ -17,9 +17,18 @@ pub use db::{
     delete_user,
     delete_booking,
     get_users_for_broadcast,
+    // Event Store functions
+    save_broadcast_event, get_broadcast_events, is_event_processed,
+    // Read Model functions
+    create_broadcast_summary, update_broadcast_summary, get_broadcast_summary, get_all_broadcast_summaries,
+    create_broadcast_message, update_broadcast_message, get_broadcast_messages,
+    // Command handlers
+    handle_create_broadcast, handle_retry_message, handle_cancel_broadcast,
+    // Query handlers
+    handle_get_broadcast_status, handle_get_broadcast_messages,
 };
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, NaiveDateTime};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use utoipa::ToSchema;
@@ -192,6 +201,212 @@ pub struct UpdateUserRequest {
 pub struct BroadcastRequest {
     pub message: String,
     pub include_users_without_telegram: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BroadcastMessage {
+    pub user_id: i64,
+    pub telegram_id: Option<i64>,
+    pub message: String,
+    pub broadcast_id: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BroadcastResult {
+    pub broadcast_id: String,
+    pub total_users: usize,
+    pub sent_count: usize,
+    pub failed_count: usize,
+    pub errors: Vec<String>,
+    pub completed_at: DateTime<Utc>,
+}
+
+// Event-Driven Architecture Structures
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum BroadcastEvent {
+    BroadcastCreated {
+        broadcast_id: String,
+        message: String,
+        target_users: Vec<User>,
+        created_at: DateTime<Utc>,
+    },
+    BroadcastStarted {
+        broadcast_id: String,
+        started_at: DateTime<Utc>,
+    },
+    MessageSent {
+        broadcast_id: String,
+        user_id: i64,
+        telegram_id: i64,
+        sent_at: DateTime<Utc>,
+    },
+    MessageFailed {
+        broadcast_id: String,
+        user_id: i64,
+        telegram_id: i64,
+        error: String,
+        failed_at: DateTime<Utc>,
+    },
+    MessageRetrying {
+        broadcast_id: String,
+        user_id: i64,
+        telegram_id: i64,
+        retry_count: u32,
+        retry_at: DateTime<Utc>,
+    },
+    BroadcastCompleted {
+        broadcast_id: String,
+        total_sent: u32,
+        total_failed: u32,
+        completed_at: DateTime<Utc>,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BroadcastEventRecord {
+    pub event_id: String,
+    pub broadcast_id: String,
+    pub event_type: String,
+    pub event_data: String, // JSON
+    pub created_at: NaiveDateTime,
+    pub version: i64,
+}
+
+// Read Model Structures
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+pub struct BroadcastSummary {
+    pub id: String,
+    pub message: String,
+    pub total_users: i64,
+    pub sent_count: i64,
+    pub failed_count: i64,
+    pub pending_count: i64,
+    pub status: BroadcastStatus,
+    pub created_at: NaiveDateTime,
+    pub started_at: Option<NaiveDateTime>,
+    pub completed_at: Option<NaiveDateTime>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+pub enum BroadcastStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Failed,
+}
+
+impl std::fmt::Display for BroadcastStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BroadcastStatus::Pending => write!(f, "pending"),
+            BroadcastStatus::InProgress => write!(f, "in_progress"),
+            BroadcastStatus::Completed => write!(f, "completed"),
+            BroadcastStatus::Failed => write!(f, "failed"),
+        }
+    }
+}
+
+impl From<String> for BroadcastStatus {
+    fn from(s: String) -> Self {
+        match s.as_str() {
+            "pending" => BroadcastStatus::Pending,
+            "in_progress" => BroadcastStatus::InProgress,
+            "completed" => BroadcastStatus::Completed,
+            "failed" => BroadcastStatus::Failed,
+            _ => BroadcastStatus::Pending,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+pub struct BroadcastMessageRecord {
+    pub id: i64,
+    pub broadcast_id: String,
+    pub user_id: i64,
+    pub telegram_id: Option<i64>,
+    pub status: MessageStatus,
+    pub error: Option<String>,
+    pub sent_at: Option<NaiveDateTime>,
+    pub retry_count: i64,
+    pub created_at: NaiveDateTime,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+pub enum MessageStatus {
+    Pending,
+    Sent,
+    Failed,
+    Retrying,
+}
+
+impl std::fmt::Display for MessageStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MessageStatus::Pending => write!(f, "pending"),
+            MessageStatus::Sent => write!(f, "sent"),
+            MessageStatus::Failed => write!(f, "failed"),
+            MessageStatus::Retrying => write!(f, "retrying"),
+        }
+    }
+}
+
+impl From<String> for MessageStatus {
+    fn from(s: String) -> Self {
+        match s.as_str() {
+            "pending" => MessageStatus::Pending,
+            "sent" => MessageStatus::Sent,
+            "failed" => MessageStatus::Failed,
+            "retrying" => MessageStatus::Retrying,
+            _ => MessageStatus::Pending,
+        }
+    }
+}
+
+// Command Structures
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct CreateBroadcastCommand {
+    pub message: String,
+    pub include_users_without_telegram: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct RetryMessageCommand {
+    pub broadcast_id: String,
+    pub user_id: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CancelBroadcastCommand {
+    pub broadcast_id: String,
+}
+
+// Query Structures
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GetBroadcastStatusQuery {
+    pub broadcast_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GetBroadcastMessagesQuery {
+    pub broadcast_id: String,
+    pub status: Option<MessageStatus>,
+    pub limit: Option<i32>,
+    pub offset: Option<i32>,
+}
+
+// Response Structures
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct BroadcastCreatedResponse {
+    pub broadcast_id: String,
+    pub status: BroadcastStatus,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct BroadcastStatusResponse {
+    pub broadcast: BroadcastSummary,
+    pub messages: Vec<BroadcastMessageRecord>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize, ToSchema)]

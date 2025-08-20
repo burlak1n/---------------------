@@ -1,7 +1,14 @@
-use crate::{Slot, User, CreateSlotRequest, CreateBookingRequest, CreateUserRequest, Booking, BookingInfo, BookingError, Record, UpdateSlotRequest, UpdateUserRequest, UpdateBookingRequest};
-use sqlx::{migrate::MigrateDatabase, Sqlite, SqlitePool};
-use std::env;
+use sqlx::{SqlitePool, Sqlite, migrate::MigrateDatabase};
 use chrono::Utc;
+use std::env;
+use crate::{
+    Slot, User, Record, Booking, CreateSlotRequest, CreateUserRequest, CreateBookingRequest,
+    UpdateSlotRequest, UpdateUserRequest, BookingError, BookingInfo,
+    // Event-Driven imports
+    BroadcastEvent, BroadcastEventRecord, BroadcastSummary, BroadcastStatus, BroadcastMessageRecord, MessageStatus,
+    CreateBroadcastCommand, BroadcastCreatedResponse, RetryMessageCommand, CancelBroadcastCommand,
+    GetBroadcastStatusQuery, GetBroadcastMessagesQuery, BroadcastStatusResponse,
+};
 
 pub async fn init_db() -> Result<SqlitePool, anyhow::Error> {
     let db_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
@@ -263,4 +270,486 @@ pub async fn get_users_for_broadcast(pool: &SqlitePool, include_users_without_te
             .fetch_all(pool)
             .await
     }
+}
+
+// Event Store Functions
+
+pub async fn save_broadcast_event(
+    pool: &SqlitePool,
+    event: &BroadcastEvent,
+) -> Result<(), sqlx::Error> {
+    let event_id = uuid::Uuid::new_v4().to_string();
+    let event_type = match event {
+        BroadcastEvent::BroadcastCreated { .. } => "BroadcastCreated",
+        BroadcastEvent::BroadcastStarted { .. } => "BroadcastStarted",
+        BroadcastEvent::MessageSent { .. } => "MessageSent",
+        BroadcastEvent::MessageFailed { .. } => "MessageFailed",
+        BroadcastEvent::MessageRetrying { .. } => "MessageRetrying",
+        BroadcastEvent::BroadcastCompleted { .. } => "BroadcastCompleted",
+    };
+    
+    let event_data = serde_json::to_string(event).map_err(|e| sqlx::Error::Protocol(format!("JSON serialization error: {}", e).into()))?;
+    let broadcast_id = match event {
+        BroadcastEvent::BroadcastCreated { broadcast_id, .. } => broadcast_id,
+        BroadcastEvent::BroadcastStarted { broadcast_id, .. } => broadcast_id,
+        BroadcastEvent::MessageSent { broadcast_id, .. } => broadcast_id,
+        BroadcastEvent::MessageFailed { broadcast_id, .. } => broadcast_id,
+        BroadcastEvent::MessageRetrying { broadcast_id, .. } => broadcast_id,
+        BroadcastEvent::BroadcastCompleted { broadcast_id, .. } => broadcast_id,
+    };
+
+    let now = chrono::Utc::now().naive_utc();
+    sqlx::query!(
+        "INSERT INTO broadcast_events (event_id, broadcast_id, event_type, event_data, created_at) 
+         VALUES (?, ?, ?, ?, ?)",
+        event_id,
+        broadcast_id,
+        event_type,
+        event_data,
+        now
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn get_broadcast_events(
+    pool: &SqlitePool,
+    broadcast_id: &str,
+) -> Result<Vec<BroadcastEventRecord>, sqlx::Error> {
+    let records = sqlx::query!(
+        "SELECT event_id, broadcast_id, event_type, event_data, created_at, version 
+         FROM broadcast_events 
+         WHERE broadcast_id = ? 
+         ORDER BY created_at ASC",
+        broadcast_id
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|row| BroadcastEventRecord {
+        event_id: row.event_id,
+        broadcast_id: row.broadcast_id,
+        event_type: row.event_type,
+        event_data: row.event_data,
+        created_at: row.created_at.unwrap_or_else(|| chrono::Utc::now().naive_utc()),
+        version: row.version,
+    })
+    .collect();
+
+    Ok(records)
+}
+
+pub async fn is_event_processed(
+    pool: &SqlitePool,
+    event_id: &str,
+    worker_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query!(
+        "SELECT event_id FROM processed_events WHERE event_id = ? AND worker_id = ?",
+        event_id,
+        worker_id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(result.is_some())
+}
+
+// Read Model Functions
+
+pub async fn create_broadcast_summary(
+    pool: &SqlitePool,
+    summary: &BroadcastSummary,
+) -> Result<(), sqlx::Error> {
+    let status_str = summary.status.to_string();
+    sqlx::query!(
+        "INSERT INTO broadcast_summaries (id, message, total_users, sent_count, failed_count, pending_count, status, created_at) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        summary.id,
+        summary.message,
+        summary.total_users,
+        summary.sent_count,
+        summary.failed_count,
+        summary.pending_count,
+        status_str,
+        summary.created_at
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn update_broadcast_summary(
+    pool: &SqlitePool,
+    summary: &BroadcastSummary,
+) -> Result<(), sqlx::Error> {
+    let status_str = summary.status.to_string();
+    sqlx::query!(
+        "UPDATE broadcast_summaries 
+         SET sent_count = ?, failed_count = ?, pending_count = ?, status = ?, started_at = ?, completed_at = ? 
+         WHERE id = ?",
+        summary.sent_count,
+        summary.failed_count,
+        summary.pending_count,
+        status_str,
+        summary.started_at,
+        summary.completed_at,
+        summary.id
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn get_broadcast_summary(
+    pool: &SqlitePool,
+    broadcast_id: &str,
+) -> Result<Option<BroadcastSummary>, sqlx::Error> {
+    let record = sqlx::query!(
+        "SELECT id, message, total_users, sent_count, failed_count, pending_count, status, created_at, started_at, completed_at 
+         FROM broadcast_summaries 
+         WHERE id = ?",
+        broadcast_id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    match record {
+        Some(r) => Ok(Some(BroadcastSummary {
+            id: r.id.unwrap_or_default(),
+            message: r.message,
+            total_users: r.total_users,
+            sent_count: r.sent_count.unwrap_or(0),
+            failed_count: r.failed_count.unwrap_or(0),
+            pending_count: r.pending_count.unwrap_or(0),
+            status: BroadcastStatus::from(r.status.unwrap_or_default()),
+            created_at: r.created_at.unwrap_or_default(),
+            started_at: r.started_at,
+            completed_at: r.completed_at,
+        })),
+        None => Ok(None),
+    }
+}
+
+pub async fn get_all_broadcast_summaries(
+    pool: &SqlitePool,
+    limit: Option<i32>,
+    offset: Option<i32>,
+) -> Result<Vec<BroadcastSummary>, sqlx::Error> {
+    let limit = limit.unwrap_or(50);
+    let offset = offset.unwrap_or(0);
+    
+    let records = sqlx::query!(
+        "SELECT id, message, total_users, sent_count, failed_count, pending_count, status, created_at, started_at, completed_at 
+         FROM broadcast_summaries 
+         ORDER BY created_at DESC 
+         LIMIT ? OFFSET ?",
+        limit,
+        offset
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let summaries = records
+        .into_iter()
+        .map(|r| BroadcastSummary {
+            id: r.id.unwrap_or_default(),
+            message: r.message,
+            total_users: r.total_users,
+            sent_count: r.sent_count.unwrap_or(0),
+            failed_count: r.failed_count.unwrap_or(0),
+            pending_count: r.pending_count.unwrap_or(0),
+            status: BroadcastStatus::from(r.status.unwrap_or_default()),
+            created_at: r.created_at.unwrap_or_default(),
+            started_at: r.started_at,
+            completed_at: r.completed_at,
+        })
+        .collect();
+
+    Ok(summaries)
+}
+
+pub async fn create_broadcast_message(
+    pool: &SqlitePool,
+    message: &BroadcastMessageRecord,
+) -> Result<(), sqlx::Error> {
+    let status_str = message.status.to_string();
+    sqlx::query!(
+        "INSERT INTO broadcast_messages (broadcast_id, user_id, telegram_id, status, error, sent_at, retry_count, created_at) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        message.broadcast_id,
+        message.user_id,
+        message.telegram_id,
+        status_str,
+        message.error,
+        message.sent_at,
+        message.retry_count,
+        message.created_at
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn update_broadcast_message(
+    pool: &SqlitePool,
+    message: &BroadcastMessageRecord,
+) -> Result<(), sqlx::Error> {
+    let status_str = message.status.to_string();
+    sqlx::query!(
+        "UPDATE broadcast_messages 
+         SET status = ?, error = ?, sent_at = ?, retry_count = ? 
+         WHERE broadcast_id = ? AND user_id = ?",
+        status_str,
+        message.error,
+        message.sent_at,
+        message.retry_count,
+        message.broadcast_id,
+        message.user_id
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn get_broadcast_messages(
+    pool: &SqlitePool,
+    broadcast_id: &str,
+    status: Option<MessageStatus>,
+    limit: Option<i32>,
+    offset: Option<i32>,
+) -> Result<Vec<BroadcastMessageRecord>, sqlx::Error> {
+    let mut query = "SELECT id, broadcast_id, user_id, telegram_id, status, error, sent_at, retry_count, created_at 
+                     FROM broadcast_messages 
+                     WHERE broadcast_id = ?".to_string();
+    
+    let mut params: Vec<Box<dyn sqlx::Encode<'_, sqlx::Sqlite> + Send + Sync>> = vec![Box::new(broadcast_id.to_string())];
+    
+    if let Some(status) = &status {
+        query.push_str(" AND status = ?");
+        params.push(Box::new(status.to_string()));
+    }
+    
+    query.push_str(" ORDER BY created_at ASC");
+    
+    if let Some(limit) = limit {
+        query.push_str(" LIMIT ?");
+        params.push(Box::new(limit));
+    }
+    
+    if let Some(offset) = offset {
+        query.push_str(" OFFSET ?");
+        params.push(Box::new(offset));
+    }
+
+    // Упрощенная версия без динамического SQL
+    let records = if let Some(status) = &status {
+        let status_str = status.to_string();
+        let limit_val = limit.unwrap_or(100i32);
+        let offset_val = offset.unwrap_or(0i32);
+        
+        sqlx::query!(
+            "SELECT id, broadcast_id, user_id, telegram_id, status, error, sent_at, retry_count, created_at 
+             FROM broadcast_messages 
+             WHERE broadcast_id = ? AND status = ?
+             ORDER BY created_at ASC
+             LIMIT ? OFFSET ?",
+            broadcast_id,
+            status_str,
+            limit_val,
+            offset_val
+        )
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|row| BroadcastMessageRecord {
+            id: row.id.unwrap_or(0),
+            broadcast_id: row.broadcast_id,
+            user_id: row.user_id,
+            telegram_id: row.telegram_id,
+            status: MessageStatus::from(row.status),
+            error: row.error,
+            sent_at: row.sent_at,
+            retry_count: row.retry_count.unwrap_or(0),
+            created_at: row.created_at.unwrap_or_else(|| chrono::Utc::now().naive_utc()),
+        })
+        .collect()
+    } else {
+        let limit_val = limit.unwrap_or(100i32);
+        let offset_val = offset.unwrap_or(0i32);
+        
+        sqlx::query!(
+            "SELECT id, broadcast_id, user_id, telegram_id, status, error, sent_at, retry_count, created_at 
+             FROM broadcast_messages 
+             WHERE broadcast_id = ?
+             ORDER BY created_at ASC
+             LIMIT ? OFFSET ?",
+            broadcast_id,
+            limit_val,
+            offset_val
+        )
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|row| BroadcastMessageRecord {
+            id: row.id.unwrap_or(0),
+            broadcast_id: row.broadcast_id,
+            user_id: row.user_id,
+            telegram_id: row.telegram_id,
+            status: MessageStatus::from(row.status),
+            error: row.error,
+            sent_at: row.sent_at,
+            retry_count: row.retry_count.unwrap_or(0),
+            created_at: row.created_at.unwrap_or_else(|| chrono::Utc::now().naive_utc()),
+        })
+        .collect()
+    };
+
+    Ok(records)
+}
+
+// Command Handlers
+
+pub async fn handle_create_broadcast(
+    pool: &SqlitePool,
+    command: CreateBroadcastCommand,
+) -> Result<BroadcastCreatedResponse, Box<dyn std::error::Error>> {
+    let broadcast_id = uuid::Uuid::new_v4().to_string();
+    
+    // Получаем пользователей
+    let users = get_users_for_broadcast(pool, command.include_users_without_telegram).await?;
+    
+    // Создаем событие
+    let event = BroadcastEvent::BroadcastCreated {
+        broadcast_id: broadcast_id.clone(),
+        message: command.message.clone(),
+        target_users: users.clone(),
+        created_at: chrono::Utc::now(),
+    };
+    
+    // Сохраняем событие
+    save_broadcast_event(pool, &event).await?;
+    
+    // Создаем read model
+    let summary = BroadcastSummary {
+        id: broadcast_id.clone(),
+        message: command.message,
+        total_users: users.len() as i64,
+        sent_count: 0,
+        failed_count: 0,
+        pending_count: users.len() as i64,
+        status: BroadcastStatus::Pending,
+        created_at: chrono::Utc::now().naive_utc(),
+        started_at: None,
+        completed_at: None,
+    };
+    
+    create_broadcast_summary(pool, &summary).await?;
+    
+    // Создаем записи сообщений
+    for user in users {
+        let message_record = BroadcastMessageRecord {
+            id: 0, // Будет установлено БД
+            broadcast_id: broadcast_id.clone(),
+            user_id: user.id,
+            telegram_id: user.telegram_id,
+            status: MessageStatus::Pending,
+            error: None,
+            sent_at: None,
+            retry_count: 0,
+            created_at: chrono::Utc::now().naive_utc(),
+        };
+        
+        create_broadcast_message(pool, &message_record).await?;
+    }
+    
+    Ok(BroadcastCreatedResponse {
+        broadcast_id,
+        status: BroadcastStatus::Pending,
+    })
+}
+
+pub async fn handle_retry_message(
+    pool: &SqlitePool,
+    command: RetryMessageCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Получаем сообщение
+    let messages = get_broadcast_messages(pool, &command.broadcast_id, Some(MessageStatus::Failed), Some(1), Some(0)).await?;
+    
+    if let Some(mut message) = messages.into_iter().next() {
+        message.status = MessageStatus::Retrying;
+        message.retry_count += 1;
+        
+        update_broadcast_message(pool, &message).await?;
+        
+        // Создаем событие повторной попытки
+        let event = BroadcastEvent::MessageRetrying {
+            broadcast_id: command.broadcast_id,
+            user_id: command.user_id,
+            telegram_id: message.telegram_id.unwrap_or(0),
+            retry_count: message.retry_count as u32,
+            retry_at: chrono::Utc::now(),
+        };
+        
+        save_broadcast_event(pool, &event).await?;
+    }
+    
+    Ok(())
+}
+
+pub async fn handle_cancel_broadcast(
+    pool: &SqlitePool,
+    command: CancelBroadcastCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Обновляем статус в read model
+    if let Some(mut summary) = get_broadcast_summary(pool, &command.broadcast_id).await? {
+        summary.status = BroadcastStatus::Failed;
+        summary.completed_at = Some(chrono::Utc::now().naive_utc());
+        
+        update_broadcast_summary(pool, &summary).await?;
+    }
+    
+    Ok(())
+}
+
+// Query Handlers
+
+pub async fn handle_get_broadcast_status(
+    pool: &SqlitePool,
+    query: GetBroadcastStatusQuery,
+) -> Result<Option<BroadcastStatusResponse>, Box<dyn std::error::Error>> {
+    let summary = get_broadcast_summary(pool, &query.broadcast_id).await?;
+    
+    match summary {
+        Some(broadcast) => {
+            let messages = get_broadcast_messages(pool, &query.broadcast_id, None, Some(100), Some(0)).await?;
+            
+            Ok(Some(BroadcastStatusResponse {
+                broadcast,
+                messages,
+            }))
+        }
+        None => Ok(None),
+    }
+}
+
+pub async fn handle_get_broadcast_messages(
+    pool: &SqlitePool,
+    query: GetBroadcastMessagesQuery,
+) -> Result<Vec<BroadcastMessageRecord>, Box<dyn std::error::Error>> {
+    let messages = get_broadcast_messages(
+        pool,
+        &query.broadcast_id,
+        query.status,
+        query.limit,
+        query.offset,
+    ).await?;
+    
+    Ok(messages)
 }
