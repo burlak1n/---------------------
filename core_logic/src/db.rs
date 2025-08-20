@@ -252,3 +252,15 @@ pub async fn delete_booking(pool: &SqlitePool, booking_id: i64) -> Result<(), sq
 
     Ok(())
 }
+
+pub async fn get_users_for_broadcast(pool: &SqlitePool, include_users_without_telegram: bool) -> Result<Vec<User>, sqlx::Error> {
+    if include_users_without_telegram {
+        sqlx::query_as::<_, User>("SELECT * FROM users")
+            .fetch_all(pool)
+            .await
+    } else {
+        sqlx::query_as::<_, User>("SELECT * FROM users WHERE telegram_id IS NOT NULL")
+            .fetch_all(pool)
+            .await
+    }
+}

@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard';
 import Slots from './pages/Slots';
 import Users from './pages/Users';
 import Bookings from './pages/Bookings';
+import Broadcast from './pages/Broadcast';
 import './App.css';
 
 function App() {
@@ -15,6 +16,7 @@ function App() {
           <Route path="slots" element={<Slots />} />
           <Route path="users" element={<Users />} />
           <Route path="bookings" element={<Bookings />} />
+          <Route path="broadcast" element={<Broadcast />} />
         </Route>
       </Routes>
     </Router>

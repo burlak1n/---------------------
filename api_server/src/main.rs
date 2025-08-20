@@ -6,7 +6,7 @@ use axum::{
     http::StatusCode,
 };
 use std::net::SocketAddr;
-use core_logic::{Slot, Booking, User, CreateSlotRequest, CreateBookingRequest, CreateUserRequest, Record, UpdateSlotRequest, UpdateUserRequest};
+use core_logic::{Slot, Booking, User, CreateSlotRequest, CreateBookingRequest, CreateUserRequest, Record, UpdateSlotRequest, UpdateUserRequest, BroadcastRequest};
 use sqlx::SqlitePool;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -48,11 +48,12 @@ async fn main() {
     let app = Router::new()
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .route("/slots", get(get_slots).post(create_slot))
-        .route("/slots/:id", put(update_slot).delete(delete_slot))
+        .route("/slots/{id}", put(update_slot).delete(delete_slot))
         .route("/bookings", post(create_booking).get(get_bookings))
-        .route("/bookings/:id", delete(delete_booking))
+        .route("/bookings/{id}", delete(delete_booking))
         .route("/users", get(get_users).post(create_user))
-        .route("/users/:id", put(update_user).delete(delete_user))
+        .route("/users/{id}", put(update_user).delete(delete_user))
+        .route("/broadcast", post(broadcast_message))
         .layer(cors)
         .with_state(pool);
 
@@ -288,6 +289,36 @@ async fn delete_booking(
 ) -> Result<StatusCode, (StatusCode, String)> {
     match core_logic::db::delete_booking(&pool, booking_id).await {
         Ok(_) => Ok(StatusCode::NO_CONTENT),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Database error: {}", e),
+        )),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/broadcast",
+    request_body = BroadcastRequest,
+    responses(
+        (status = 200, description = "Broadcast message sent successfully", body = serde_json::Value)
+    )
+)]
+async fn broadcast_message(
+    State(pool): State<SqlitePool>, 
+    Json(payload): Json<BroadcastRequest>
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    match core_logic::db::get_users_for_broadcast(&pool, payload.include_users_without_telegram).await {
+        Ok(users) => {
+            let response = serde_json::json!({
+                "success": true,
+                "message": "Broadcast message prepared",
+                "users_count": users.len(),
+                "users_with_telegram": users.iter().filter(|u| u.telegram_id.is_some()).count(),
+                "users_without_telegram": users.iter().filter(|u| u.telegram_id.is_none()).count()
+            });
+            Ok(Json(response))
+        },
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Database error: {}", e),

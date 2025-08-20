@@ -16,6 +16,7 @@ pub use db::{
     delete_slot,
     delete_user,
     delete_booking,
+    get_users_for_broadcast,
 };
 
 use chrono::{DateTime, Utc};
@@ -185,6 +186,12 @@ pub struct UpdateBookingRequest {
 pub struct UpdateUserRequest {
     pub name: Option<String>,
     pub telegram_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct BroadcastRequest {
+    pub message: String,
+    pub include_users_without_telegram: bool,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize, ToSchema)]

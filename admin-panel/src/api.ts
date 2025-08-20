@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Slot, User, BookingRecord, CreateSlotRequest, CreateUserRequest, CreateBookingRequest, UpdateSlotRequest, UpdateUserRequest } from './types';
+import type { Slot, User, BookingRecord, CreateSlotRequest, CreateUserRequest, CreateBookingRequest, UpdateSlotRequest, UpdateUserRequest, BroadcastRequest, BroadcastResponse } from './types';
 
 const API_BASE_URL = 'http://localhost:3000';
 
@@ -68,5 +68,13 @@ export const bookingsApi = {
 
   delete: async (id: number): Promise<void> => {
     await api.delete(`/bookings/${id}`);
+  },
+};
+
+// Broadcast API
+export const broadcastApi = {
+  send: async (request: BroadcastRequest): Promise<BroadcastResponse> => {
+    const response = await api.post<BroadcastResponse>('/broadcast', request);
+    return response.data;
   },
 };

@@ -54,3 +54,16 @@ export interface UpdateUserRequest {
   name?: string;
   telegram_id?: number;
 }
+
+export interface BroadcastRequest {
+  message: string;
+  include_users_without_telegram: boolean;
+}
+
+export interface BroadcastResponse {
+  success: boolean;
+  message: string;
+  users_count: number;
+  users_with_telegram: number;
+  users_without_telegram: number;
+}
