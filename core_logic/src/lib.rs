@@ -20,8 +20,8 @@ pub use db::{
     // Event Store functions
     save_broadcast_event, get_broadcast_events, is_event_processed,
     // Read Model functions
-    create_broadcast_summary, update_broadcast_summary, get_broadcast_summary, get_all_broadcast_summaries,
-    create_broadcast_message, update_broadcast_message, get_broadcast_messages,
+    create_broadcast_summary, update_broadcast_summary, update_broadcast_status, update_broadcast_summary_from_messages, get_broadcast_summary, get_all_broadcast_summaries,
+    create_broadcast_message, update_broadcast_message, update_broadcast_message_status, get_broadcast_messages,
     // Command handlers
     handle_create_broadcast, handle_retry_message, handle_cancel_broadcast,
     // Delete functions
@@ -291,7 +291,7 @@ pub struct BroadcastSummary {
     pub completed_at: Option<NaiveDateTime>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum BroadcastStatus {
     Pending,
@@ -336,7 +336,7 @@ pub struct BroadcastMessageRecord {
     pub created_at: NaiveDateTime,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum MessageStatus {
     Pending,

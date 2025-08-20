@@ -8,6 +8,8 @@ use sqlx::SqlitePool;
 use core_logic::CreateUserRequest;
 use anyhow::Context;
 
+mod broadcast;
+
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "These commands are supported:")]
 enum Command {
@@ -316,7 +318,8 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::select! {
         _ = dispatcher.dispatch() => {},
-        _ = notification_scheduler(bot, pool) => {},
+        _ = notification_scheduler(bot.clone(), pool.clone()) => {},
+        _ = broadcast::broadcast_worker(bot, pool) => {},
     }
 
     Ok(())

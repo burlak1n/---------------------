@@ -46,12 +46,13 @@ const Broadcast: React.FC = () => {
           if (status) {
             setBroadcastStatus(status);
             
-            // Останавливаем polling если рассылка завершена
+            // Обновляем currentBroadcast с актуальным статусом
+            setCurrentBroadcast(prev => prev ? { ...prev, status: status.broadcast.status } : null);
+            
+            // Если рассылка завершена, останавливаем polling
             if (status.broadcast.status === 'completed' || status.broadcast.status === 'failed') {
               clearInterval(interval);
               setPollingInterval(null);
-              // Обновляем currentBroadcast с финальным статусом
-              setCurrentBroadcast(prev => prev ? { ...prev, status: status.broadcast.status } : null);
               // Обновляем историю после завершения рассылки
               loadBroadcastHistory();
             }
@@ -107,6 +108,30 @@ const Broadcast: React.FC = () => {
       loadBroadcastHistory();
     } catch (err) {
       setError('Ошибка при создании рассылки. Попробуйте позже.');
+      console.error('Broadcast error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSendSignUpMessage = async () => {
+    setLoading(true);
+    setError(null);
+    setCurrentBroadcast(null);
+    setBroadcastStatus(null);
+
+    try {
+      const command: CreateBroadcastCommand = {
+        message: "Поздравляем! Ты успешно прошёл анкетирование и можешь записаться на собеседование по кнопке ниже",
+        include_users_without_telegram: includeUsersWithoutTelegram,
+      };
+
+      const response = await broadcastApi.create(command);
+      setCurrentBroadcast(response);
+      // Обновляем историю после создания новой рассылки
+      loadBroadcastHistory();
+    } catch (err) {
+      setError('Ошибка при создании рассылки о записи. Попробуйте позже.');
       console.error('Broadcast error:', err);
     } finally {
       setLoading(false);
@@ -253,6 +278,7 @@ const Broadcast: React.FC = () => {
       {/* Форма создания рассылки */}
       <div className="bg-white rounded-lg shadow-md p-6 mb-6">
         <h2 className="text-xl font-semibold mb-4">Создать рассылку</h2>
+        <p className="text-gray-600 mb-4">Выберите тип рассылки:</p>
         
         <form onSubmit={handleSubmit}>
           <div className="mb-4">
@@ -292,15 +318,33 @@ const Broadcast: React.FC = () => {
             </div>
           )}
 
-          <div className="flex gap-3">
-            <button
-              type="submit"
-              disabled={loading || !message.trim() || !!currentBroadcast}
-              className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <Send className="w-4 h-4 mr-2" />
-              {loading ? 'Создание...' : 'Создать рассылку'}
-            </button>
+          <div className="space-y-3">
+            <div className="flex gap-3">
+              <button
+                type="submit"
+                disabled={loading || !message.trim() || !!currentBroadcast}
+                className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Send className="w-4 h-4 mr-2" />
+                {loading ? 'Создание...' : 'Создать рассылку'}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSendSignUpMessage}
+                disabled={loading || !!currentBroadcast}
+                className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Users className="w-4 h-4 mr-2" />
+                {loading ? 'Создание...' : 'Рассылка о записи'}
+              </button>
+            </div>
+            
+            <div className="text-sm text-gray-600 space-y-1">
+              <p><strong>Создать рассылку:</strong> Отправка произвольного сообщения всем пользователям</p>
+              <p><strong>Рассылка о записи:</strong> Отправка стандартного сообщения с кнопкой записи на собеседование</p>
+            </div>
+          </div>
 
             {currentBroadcast && currentBroadcast.status === 'pending' && (
               <button
@@ -328,11 +372,36 @@ const Broadcast: React.FC = () => {
                   {currentBroadcast.status.replace('_', ' ')}
                 </span>
               </div>
+              
+              {/* Кнопка обновления статуса */}
+              <button
+                onClick={async () => {
+                  try {
+                    const status = await broadcastApi.getStatus(currentBroadcast.broadcast_id);
+                    if (status) {
+                      setBroadcastStatus(status);
+                      setCurrentBroadcast(prev => prev ? { ...prev, status: status.broadcast.status } : null);
+                    }
+                  } catch (err) {
+                    console.error('Failed to refresh status:', err);
+                  }
+                }}
+                className="flex items-center px-3 py-2 text-sm font-medium text-blue-700 bg-blue-100 rounded-md hover:bg-blue-200"
+              >
+                <RefreshCw className="w-4 h-4 mr-2" />
+                Обновить
+              </button>
+              
               {(currentBroadcast.status === 'completed' || currentBroadcast.status === 'failed') && (
                 <button
                   onClick={() => {
                     setCurrentBroadcast(null);
                     setBroadcastStatus(null);
+                    // Очищаем polling при закрытии
+                    if (pollingInterval) {
+                      clearInterval(pollingInterval);
+                      setPollingInterval(null);
+                    }
                   }}
                   className="flex items-center px-3 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
                 >

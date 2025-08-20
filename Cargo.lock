@@ -3330,6 +3330,8 @@ dependencies = [
  "chrono",
  "core_logic",
  "dotenvy",
+ "futures-util",
+ "lapin",
  "serde",
  "serde_json",
  "sqlx",
@@ -3338,6 +3340,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

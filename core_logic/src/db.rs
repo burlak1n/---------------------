@@ -405,6 +405,108 @@ pub async fn update_broadcast_summary(
     Ok(())
 }
 
+pub async fn update_broadcast_status(
+    pool: &SqlitePool,
+    broadcast_id: &str,
+    sent_count: u32,
+    failed_count: u32,
+) -> Result<(), sqlx::Error> {
+    // Получаем текущую сводку рассылки
+    let summary = get_broadcast_summary(pool, broadcast_id).await?;
+    
+    if let Some(mut current_summary) = summary {
+        // Обновляем счетчики
+        current_summary.sent_count = sent_count as i64;
+        current_summary.failed_count = failed_count as i64;
+        
+        // Получаем реальное количество pending сообщений из БД
+        let pending_count = sqlx::query!(
+            "SELECT COUNT(*) as count FROM broadcast_messages WHERE broadcast_id = ? AND status = 'pending'",
+            broadcast_id
+        )
+        .fetch_one(pool)
+        .await?
+        .count;
+        
+        current_summary.pending_count = pending_count;
+        
+        // Определяем статус на основе реального состояния сообщений
+        let (status, completed_at) = if pending_count == 0 && current_summary.total_users > 0 {
+            // Все сообщения обработаны
+            (BroadcastStatus::Completed, Some(chrono::Utc::now().naive_utc()))
+        } else if current_summary.total_users > 0 {
+            // Есть pending сообщения
+            (BroadcastStatus::InProgress, None)
+        } else {
+            // Нет пользователей
+            (BroadcastStatus::Pending, None)
+        };
+        
+        current_summary.status = status;
+        current_summary.completed_at = completed_at;
+        
+        // Обновляем сводку
+        update_broadcast_summary(pool, &current_summary).await?;
+    }
+
+    Ok(())
+}
+
+pub async fn update_broadcast_summary_from_messages(
+    pool: &SqlitePool,
+    broadcast_id: &str,
+) -> Result<(), sqlx::Error> {
+    // Получаем актуальную статистику по сообщениям
+    let sent_count = sqlx::query!(
+        "SELECT COUNT(*) as count FROM broadcast_messages WHERE broadcast_id = ? AND status = 'sent'",
+        broadcast_id
+    )
+    .fetch_one(pool)
+    .await?
+    .count;
+
+    let failed_count = sqlx::query!(
+        "SELECT COUNT(*) as count FROM broadcast_messages WHERE broadcast_id = ? AND status = 'failed'",
+        broadcast_id
+    )
+    .fetch_one(pool)
+    .await?
+    .count;
+
+    let pending_count = sqlx::query!(
+        "SELECT COUNT(*) as count FROM broadcast_messages WHERE broadcast_id = ? AND status = 'pending'",
+        broadcast_id
+    )
+    .fetch_one(pool)
+    .await?
+    .count;
+
+    // Получаем текущую сводку
+    let summary = get_broadcast_summary(pool, broadcast_id).await?;
+    
+    if let Some(mut current_summary) = summary {
+        // Обновляем счетчики
+        current_summary.sent_count = sent_count;
+        current_summary.failed_count = failed_count;
+        current_summary.pending_count = pending_count;
+        
+        // Определяем статус на основе реального состояния
+        if pending_count == 0 && current_summary.total_users > 0 {
+            // Все сообщения обработаны
+            current_summary.status = BroadcastStatus::Completed;
+            current_summary.completed_at = Some(chrono::Utc::now().naive_utc());
+        } else if current_summary.total_users > 0 {
+            // Есть pending сообщения
+            current_summary.status = BroadcastStatus::InProgress;
+        }
+        
+        // Обновляем сводку с новыми счетчиками
+        update_broadcast_summary(pool, &current_summary).await?;
+    }
+
+    Ok(())
+}
+
 pub async fn get_broadcast_summary(
     pool: &SqlitePool,
     broadcast_id: &str,
@@ -514,6 +616,39 @@ pub async fn update_broadcast_message(
     )
     .execute(pool)
     .await?;
+
+    Ok(())
+}
+
+pub async fn update_broadcast_message_status(
+    pool: &SqlitePool,
+    broadcast_id: &str,
+    user_id: &i64,
+    status: MessageStatus,
+    error: Option<String>,
+) -> Result<(), sqlx::Error> {
+    let status_str = status.to_string();
+    let sent_at = if status == MessageStatus::Sent { 
+        Some(chrono::Utc::now().naive_utc()) 
+    } else { 
+        None 
+    };
+    
+    sqlx::query!(
+        "UPDATE broadcast_messages 
+         SET status = ?, error = ?, sent_at = ? 
+         WHERE broadcast_id = ? AND user_id = ?",
+        status_str,
+        error,
+        sent_at,
+        broadcast_id,
+        user_id
+    )
+    .execute(pool)
+    .await?;
+
+    // Обновляем сводку рассылки после изменения статуса сообщения
+    update_broadcast_summary_from_messages(pool, broadcast_id).await?;
 
     Ok(())
 }

@@ -7,7 +7,6 @@ edition = "2021"
 axum = { workspace = true, features = ["macros"] }
 tokio = { workspace = true }
 sqlx = { workspace = true }
-
 serde = { workspace = true }
 serde_json = { workspace = true }
 core_logic = { workspace = true }
@@ -15,12 +14,12 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 dotenvy = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+lapin = { workspace = true }
+uuid = { workspace = true }
+teloxide = { workspace = true }
+futures-util = { workspace = true }
 utoipa = { version = "5.4.0", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
 tower-http = { version = "0.6.6", features = ["cors"] }
-lapin = "3.2"
 tokio-stream = "0.1"
-uuid = { version = "1.0", features = ["v4"] }
-teloxide = { version = "0.17", features = ["macros"] }
-tracing-subscriber = "0.3"
-futures-util = "0.3"

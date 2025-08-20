@@ -2,17 +2,16 @@ use lapin::{
     options::BasicAckOptions, options::BasicConsumeOptions, types::FieldTable, Channel, Connection,
     ConnectionProperties, Consumer,
 };
+use lapin::protocol::basic::AMQPProperties;
 use serde_json;
 use std::time::Duration;
 use teloxide::prelude::*;
-use teloxide::types::{ParseMode, ChatId};
-use tokio::time::timeout;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 use futures_util::StreamExt;
 use sqlx::SqlitePool;
 
-use core_logic::{BroadcastEvent, BroadcastMessage};
+use core_logic::{BroadcastEvent, BroadcastMessage, BroadcastMessageRecord, MessageStatus};
 
 const EVENTS_QUEUE_NAME: &str = "broadcast_events";
 const EVENTS_EXCHANGE_NAME: &str = "broadcast_events_exchange";
@@ -116,7 +115,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .await?;
 
-    info!("Event worker started, waiting for events...");
+    info!("🚀 Event worker started successfully!");
+    info!("Worker configuration:");
+    info!("  - Events queue: {}", EVENTS_QUEUE_NAME);
+    info!("  - Broadcast queue: {}", BROADCAST_QUEUE_NAME);
+    info!("  - RabbitMQ URL: {}", rabbitmq_url);
+    info!("Waiting for events...");
 
     // Обрабатываем события
     process_events(events_consumer, channel, &pool).await?;
@@ -131,12 +135,21 @@ async fn process_events(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let bot = Bot::from_env();
     let worker_id = Uuid::new_v4().to_string();
+    
+    info!("🎯 Starting event processing loop");
+    info!("Worker ID: {}", worker_id);
+    info!("Bot token loaded: {}", if !bot.token().is_empty() { "✅" } else { "❌" });
 
+    info!("🔄 Starting event consumption loop...");
     while let Some(delivery) = consumer.next().await {
+        info!("📨 Received delivery from RabbitMQ");
         let delivery = match delivery {
-            Ok(delivery) => delivery,
+            Ok(delivery) => {
+                info!("✅ Delivery received successfully, tag: {}", delivery.delivery_tag);
+                delivery
+            }
             Err(e) => {
-                error!("Failed to receive event: {}", e);
+                error!("❌ Failed to receive event: {}", e);
                 continue;
             }
         };
@@ -155,41 +168,54 @@ async fn process_events(
             }
         };
 
-        info!("Processing event: {:?}", std::mem::discriminant(&event));
+        info!("=== PROCESSING EVENT ===");
+        info!("Event type: {:?}", std::mem::discriminant(&event));
+        info!("Event data: {:?}", event);
+        info!("Worker ID: {}", worker_id);
 
         // Обрабатываем событие
-        let process_result = handle_event(&bot, &event, &worker_id, pool).await;
+        info!("Calling handle_event for event type: {:?}", std::mem::discriminant(&event));
+        let process_result = handle_event(&bot, &event, &worker_id, pool, &channel).await;
 
         match process_result {
             Ok(_) => {
-                info!("Successfully processed event: {:?}", std::mem::discriminant(&event));
+                info!("✅ Successfully processed event: {:?}", std::mem::discriminant(&event));
             }
             Err(e) => {
-                error!("Failed to process event: {:?}: {}", std::mem::discriminant(&event), e);
+                error!("❌ Failed to process event: {:?}: {}", std::mem::discriminant(&event), e);
             }
         }
+        
+        info!("=== EVENT PROCESSING COMPLETE ===");
 
         // Подтверждаем обработку события
+        info!("Sending ACK for delivery tag: {}", delivery_tag);
         if let Err(e) = channel.basic_ack(delivery_tag, BasicAckOptions::default()).await {
-            error!("Failed to ack event: {}", e);
+            error!("❌ Failed to ack event: {}", e);
+        } else {
+            info!("✅ Event acknowledged successfully");
         }
 
         // Небольшая задержка для избежания rate limiting
+        info!("⏳ Waiting 100ms before next event...");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
+    info!("🛑 Event processing loop ended");
     Ok(())
 }
 
 async fn handle_event(
-    bot: &Bot,
+    _bot: &Bot,
     event: &BroadcastEvent,
-    worker_id: &str,
+    _worker_id: &str,
     pool: &SqlitePool,
+    channel: &Channel,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match event {
         BroadcastEvent::BroadcastCreated { broadcast_id, message: _, target_users: _, .. } => {
-            info!("Starting broadcast {}", broadcast_id);
+            info!("=== STARTING BROADCAST {} ===", broadcast_id);
+            info!("Event worker {} processing broadcast creation", _worker_id);
             
             // Получаем пользователей из БД
             let users = match core_logic::db::get_users_for_broadcast(pool, false).await {
@@ -201,6 +227,7 @@ async fn handle_event(
             };
             
             info!("Broadcast {} will be sent to {} users", broadcast_id, users.len());
+            info!("Users: {:?}", users.iter().map(|u| (u.id, u.telegram_id)).collect::<Vec<_>>());
             
             // Получаем сообщение из БД
             let summary = match core_logic::db::get_broadcast_summary(pool, broadcast_id).await {
@@ -216,7 +243,7 @@ async fn handle_event(
             };
             
             // Отправляем события начала рассылки
-            let start_event = BroadcastEvent::BroadcastStarted {
+            let _start_event = BroadcastEvent::BroadcastStarted {
                 broadcast_id: broadcast_id.clone(),
                 started_at: chrono::Utc::now(),
             };
@@ -224,12 +251,14 @@ async fn handle_event(
             // Публикуем событие начала (в реальной системе это должно идти через RabbitMQ)
             info!("Broadcast {} started", broadcast_id);
             
-            // Отправляем сообщения в очередь для обработки
-            let mut sent_count = 0;
+            // Создаем записи сообщений в БД и отправляем в очередь
+            let mut queued_count = 0;
             let mut failed_count = 0;
             
             for user in users {
                 if let Some(telegram_id) = user.telegram_id {
+                    info!("Processing user {} (telegram_id: {}) for broadcast {}", user.id, telegram_id, broadcast_id);
+                    
                     let broadcast_message = BroadcastMessage {
                         user_id: user.id,
                         telegram_id: Some(telegram_id),
@@ -238,54 +267,61 @@ async fn handle_event(
                         created_at: chrono::Utc::now(),
                     };
                     
-                    // В реальной системе здесь нужно отправить в очередь сообщений
-                    // Для простоты отправляем напрямую
-                    let send_result = send_telegram_message(bot, &broadcast_message).await;
+                    // Отправляем сообщение в очередь для telegram-бота
+                    info!("Publishing message to RabbitMQ for user {} in broadcast {}", user.id, broadcast_id);
+                    let publish_result = publish_broadcast_message(channel, &broadcast_message).await;
                     
-                    match send_result {
+                    match publish_result {
                         Ok(_) => {
-                            info!("Sent message to user {} (broadcast: {})", user.id, broadcast_id);
-                            sent_count += 1;
-                            
-                            // Обновляем статус сообщения в БД
-                            if let Err(e) = update_message_status(pool, &broadcast_message, true, None).await {
-                                error!("Failed to update message status: {}", e);
-                            }
+                            info!("✅ Successfully queued message for user {} (broadcast: {})", user.id, broadcast_id);
+                            queued_count += 1;
                         }
                         Err(e) => {
-                            error!("Failed to send message to user {} (broadcast: {}): {}", user.id, broadcast_id, e);
+                            error!("❌ Failed to queue message for user {} (broadcast: {}): {}", user.id, broadcast_id, e);
                             failed_count += 1;
                             
-                            // Обновляем статус сообщения в БД
-                            if let Err(e) = update_message_status(pool, &broadcast_message, false, Some(e.to_string())).await {
+                            // Обновляем статус на "failed" если не удалось отправить в очередь
+                            info!("Updating message status to failed for user {} in broadcast {}", user.id, broadcast_id);
+                            if let Err(e) = core_logic::db::update_broadcast_message_status(pool, &broadcast_message.broadcast_id, &broadcast_message.user_id, core_logic::MessageStatus::Failed, Some(e.to_string())).await {
                                 error!("Failed to update message status: {}", e);
                             }
                         }
                     }
-                    
-                    // Задержка между сообщениями
-                    tokio::time::sleep(Duration::from_millis(200)).await;
                 }
             }
             
-            // Обновляем статус рассылки в БД
-            info!("Updating broadcast {} status: sent={}, failed={}", broadcast_id, sent_count, failed_count);
-            if let Err(e) = update_broadcast_status(pool, broadcast_id, sent_count, failed_count).await {
-                error!("Failed to update broadcast status: {}", e);
-            } else {
-                info!("Successfully updated broadcast {} status to completed", broadcast_id);
+            // Обновляем статус рассылки в БД - устанавливаем InProgress
+            info!("=== BROADCAST {} PROCESSING COMPLETE ===", broadcast_id);
+            info!("Final counts: queued={}, failed={}", queued_count, failed_count);
+            info!("Updating broadcast {} status to InProgress", broadcast_id);
+            
+            // Получаем текущую сводку и обновляем статус на InProgress
+            if let Ok(Some(mut summary)) = core_logic::db::get_broadcast_summary(pool, broadcast_id).await {
+                summary.status = core_logic::BroadcastStatus::InProgress;
+                summary.started_at = Some(chrono::Utc::now().naive_utc());
+                
+                if let Err(e) = core_logic::db::update_broadcast_summary(pool, &summary).await {
+                    error!("❌ Failed to update broadcast status: {}", e);
+                } else {
+                    info!("✅ Successfully updated broadcast {} status to InProgress", broadcast_id);
+                }
             }
+            
+            // НЕ устанавливаем статус Completed здесь - он будет установлен автоматически
+            // когда все сообщения будут обработаны telegram_bot
+            
+            info!("=== BROADCAST {} FINISHED ===", broadcast_id);
         }
         
-        BroadcastEvent::MessageSent { broadcast_id, user_id, telegram_id, .. } => {
+        BroadcastEvent::MessageSent { broadcast_id, user_id, .. } => {
             info!("Message sent to user {} (broadcast: {})", user_id, broadcast_id);
         }
         
-        BroadcastEvent::MessageFailed { broadcast_id, user_id, telegram_id, error, .. } => {
+        BroadcastEvent::MessageFailed { broadcast_id, user_id, error, .. } => {
             warn!("Message failed for user {} (broadcast: {}): {}", user_id, broadcast_id, error);
         }
         
-        BroadcastEvent::MessageRetrying { broadcast_id, user_id, telegram_id, retry_count, .. } => {
+        BroadcastEvent::MessageRetrying { broadcast_id, user_id, retry_count, .. } => {
             info!("Retrying message for user {} (broadcast: {}, attempt: {})", user_id, broadcast_id, retry_count);
         }
         
@@ -298,98 +334,41 @@ async fn handle_event(
         }
     }
 
+    info!("✅ handle_event completed successfully");
     Ok(())
 }
 
-async fn send_telegram_message(
-    bot: &Bot,
+async fn publish_broadcast_message(
+    channel: &Channel,
     message: &BroadcastMessage,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(telegram_id) = message.telegram_id {
-        let timeout_duration = Duration::from_secs(10);
-        
-        let send_result = timeout(
-            timeout_duration,
-            bot.send_message(ChatId(telegram_id), &message.message)
-                .parse_mode(ParseMode::Html)
+    info!("Publishing message to RabbitMQ: user_id={}, broadcast_id={}", message.user_id, message.broadcast_id);
+    
+    let message_json = serde_json::to_vec(message)?;
+    info!("Message JSON size: {} bytes", message_json.len());
+    
+    let result = channel
+        .basic_publish(
+            BROADCAST_EXCHANGE_NAME,
+            "broadcast",
+            lapin::options::BasicPublishOptions::default(),
+            &message_json,
+            AMQPProperties::default(),
         )
         .await;
-
-        match send_result {
-            Ok(Ok(_)) => Ok(()),
-            Ok(Err(e)) => {
-                warn!("Telegram API error: {}", e);
-                Err(Box::new(e))
-            }
-            Err(_) => {
-                warn!("Timeout sending message to {}", telegram_id);
-                Err("Send timeout".into())
-            }
+    
+    match result {
+        Ok(_) => {
+            info!("✅ Message published to RabbitMQ successfully");
+            Ok(())
         }
-    } else {
-        Err("No telegram_id provided".into())
+        Err(e) => {
+            error!("❌ Failed to publish message to RabbitMQ: {}", e);
+            Err(Box::new(e))
+        }
     }
 }
 
-async fn update_message_status(
-    pool: &SqlitePool,
-    message: &BroadcastMessage,
-    success: bool,
-    error: Option<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let status = if success { 
-        core_logic::MessageStatus::Sent.to_string() 
-    } else { 
-        core_logic::MessageStatus::Failed.to_string() 
-    };
-    let sent_at = if success { Some(chrono::Utc::now().naive_utc()) } else { None };
-    
-    sqlx::query!(
-        "UPDATE broadcast_messages 
-         SET status = ?, error = ?, sent_at = ? 
-         WHERE broadcast_id = ? AND user_id = ?",
-        status,
-        error,
-        sent_at,
-        message.broadcast_id,
-        message.user_id
-    )
-    .execute(pool)
-    .await?;
 
-    Ok(())
-}
 
-async fn update_broadcast_status(
-    pool: &SqlitePool,
-    broadcast_id: &str,
-    sent_count: u32,
-    failed_count: u32,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let status = core_logic::BroadcastStatus::Completed.to_string();
-    let completed_at = chrono::Utc::now().naive_utc();
-    let sent_count_i64 = sent_count as i64;
-    let failed_count_i64 = failed_count as i64;
-    let pending_count_i64 = 0i64; // Все сообщения обработаны
-    
-    info!("Executing SQL update for broadcast {}: status={}, sent={}, failed={}, pending={}", 
-          broadcast_id, status, sent_count_i64, failed_count_i64, pending_count_i64);
-    
-    let result = sqlx::query!(
-        "UPDATE broadcast_summaries 
-         SET status = ?, sent_count = ?, failed_count = ?, pending_count = ?, completed_at = ? 
-         WHERE id = ?",
-        status,
-        sent_count_i64,
-        failed_count_i64,
-        pending_count_i64,
-        completed_at,
-        broadcast_id
-    )
-    .execute(pool)
-    .await?;
 
-    info!("SQL update result: {} rows affected", result.rows_affected());
-    
-    Ok(())
-}

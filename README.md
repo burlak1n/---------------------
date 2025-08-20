@@ -1,117 +1,89 @@
-Отлично! Спасибо за подробные ответы. На основе ваших требований и уточнений я составил подробное техническое задание на английском языке.
+# Система записи на собеседования
 
----
+Система для управления записями на собеседования с Telegram-ботом и административной панелью.
 
-### **Technical Specification: Telegram Interview Booking Bot**
+## Архитектура
 
-**Version:** 1.0
-**Date:** 2024-05-25
-**Status:** Approved
+### Компоненты системы
 
-### 1. Project Overview
+1. **Telegram Bot** (`telegram_bot/`) - основной бот для пользователей
+   - Обработка команд и callback-запросов
+   - Автоматические напоминания
+   - **Broadcast Worker** - обработка массовых рассылок
 
-This document describes the requirements for a Telegram Bot developed in Rust. The bot's primary function is to manage the booking process for interview slots, providing a seamless user experience within Telegram and integrating with a separate administrative web service.
+2. **API Server** (`api_server/`) - REST API и административная логика
+   - REST API для админ-панели
+   - **Event Worker** - координация рассылок через события
 
-### 2. Goals & Objectives
+3. **Admin Panel** (`admin-panel/`) - веб-интерфейс для администраторов
+   - React + TypeScript
+   - Управление слотами, пользователями, рассылками
 
-*   **Primary Goal:** To automate the process of scheduling interviews via a Telegram bot, reducing manual coordination.
-*   **User Goal:** To allow pre-approved candidates to easily view available interview slots, book, and reschedule their appointments.
-*   **Admin Goal:** To provide administrators with a web interface to configure available slots and monitor bookings.
-*   **Technical Goal:** To create a reliable, maintainable, and efficient system using Rust, with clear separation of concerns and integration points via databases.
+4. **Core Logic** (`core_logic/`) - общая бизнес-логика
+   - Структуры данных
+   - Функции работы с БД
+   - Event-driven архитектура
 
-### 3. Definitions & Abbreviations
+### Поток данных для рассылок
 
-*   **Slot:** A specific time interval on a given date available for booking (e.g., "2023-10-26 14:00-15:00").
-*   **Admin Service:** The separate backend service with a web interface, responsible for configuration and data persistence.
-*   **Bot:** The Rust application implementing the Telegram Bot logic.
-*   **User:** A candidate with a pre-approved `telegram_id` who interacts with the bot.
+```
+Admin Panel → API Server → Event Worker → RabbitMQ → Telegram Bot (Broadcast Worker) → Telegram API
+```
 
-### 4. System Architecture
+**Event Worker**:
+- Обрабатывает события `BroadcastCreated`
+- Получает пользователей из БД
+- Отправляет сообщения в очередь RabbitMQ
 
-The system consists of two main components:
-1.  **Telegram Bot (Rust):** Handles all user interaction, state management, and real-time messaging.
-2.  **Admin Service (External):** Provides a web admin panel, manages configuration, and persists final booking data. It uses **SQLite** as its primary database, and **Redis** for caching.
+**Telegram Bot (Broadcast Worker)**:
+- Слушает очередь `telegram_broadcast`
+- Отправляет сообщения через Telegram API
+- Обновляет статусы в БД
 
+## Запуск
 
+### Предварительные требования
+- Rust
+- Node.js
+- SQLite
+- RabbitMQ
 
-### 5. Functional Requirements
+### Переменные окружения
+```bash
+# .env
+DATABASE_URL=sqlite:./data.db
+RABBITMQ_URL=amqp://localhost:5672
+TELEGRAM_BOT_TOKEN=your_bot_token
+CONTACT_USERNAME=admin_username
+```
 
-**5.1. User Booking Flow (Telegram Bot)**
+### Запуск сервисов
 
-*   **FR2: Authentication.** The bot shall only process button clicks and commands from users whose `telegram_id` is present in an allow list provided by the Admin Service (via an API endpoint or cached in Redis).
-*   **FR3: Slot Selection.**
-    *   Upon clicking "Sign Up", the original message shall be edited to show the user the next 3 available slots across all dates.
-    *   Buttons for dates with fewer than 3 available slots shall be filled with slots from subsequent dates.
-    *   Each slot button must display the time, location, and room/audience number.
-*   **FR4: Booking Confirmation.**
-    *   After selecting a slot, the message shall be edited again to show the chosen date, time, location, and a final "Confirm" button.
-    *   Upon confirmation, the keyboard shall be removed from the message, and a success message shall be displayed, including a command (e.g., `/reschedule`) for future use.
-*   **FR5: Conflict Handling.** If a user selects a slot that was just taken, the bot shall display an error message ("Sorry, this slot is no longer available") and refresh the interface with current available slots.
-*   **FR6: Rescheduling.** The `/reschedule` command shall clear the user's existing booking and restart the booking flow (FR3).
-*   **FR7: Contact Request.** If no slots are suitable, a message within the bot shall instruct the user to use a command (e.g., `/contact`). Using this command shall send the user a link to the Telegram account of the responsible person.
-*   **FR8: Notification.** The bot shall send a reminder notification to the user at 12:00 PM MSK (9:00 AM UTC) on the day of their interview. The notification shall include the interview time and other relevant details.
-*   **FR9: Slot Availability.** A slot shall become unavailable for new bookings 2 hours before its start time.
+1. **Telegram Bot** (включает broadcast worker):
+```bash
+cd telegram_bot
+cargo run
+```
 
-**5.2. Admin Service Integration**
-*   **FR10: Slot Management.** The Admin Service's web interface must allow authorized admins to:
-    *   Create and configure interview events with multiple dates and slots.
-    *   Define the maximum number of people per slot.
-    *   Set the location and audience for each slot.
-    *   Edit or deactivate future slots. Attempting to delete a slot with existing bookings must result in a warning showing the affected users, not a deletion.
-*   **FR11: Data Visibility.** The Admin Service's web interface must provide a view of all bookings, showing user info (`telegram_id`, likely `username`) and their assigned slot details.
+2. **API Server** (включает event worker):
+```bash
+cd api_server
+cargo run
+```
 
+3. **Admin Panel**:
+```bash
+cd admin-panel
+npm install
+npm run dev
+```
 
-### 6. Non-Functional Requirements
+## Преимущества новой архитектуры
 
-*   **NFR1: Performance.** The bot must respond to user interactions (button presses) within 2 seconds.
-*   **NFR2: Reliability.** The system must ensure no double-booking of slots. The state of slot availability must be consistent between the Bot and the Admin Service.
-*   **NFR3: Security:**
-    *   Access to the bot's functionality must be restricted to users on the allow list.
-    *   Communication between services should be considered for authentication mechanisms.
-*   **NFR4: Maintainability:** The Rust code must be well-structured, use common idioms, and have logging (`log`, `tracing`) implemented for debugging.
-
-### 7. Data Schemas & Storage
-
-**7.1. Redis (Bot's State Cache)**
-*   **Key:** `slots:cache`
-    *   **Type:** String (JSON)
-    *   **Value:** `[{ "date": "2023-10-26", "slots": [{"time": "14:00", "max": 10, "booked": 4, "location": "Office A"}, ...] }, ...]`
-*   **Key:** `user:{user_id}:state`
-    *   **Type:** String
-    *   **Value:** `"waiting_for_slot" | "waiting_for_confirmation"`
-*   **Key:** `user:{user_id}:temp_data`
-    *   **Type:** String (JSON)
-    *   **Value:** `{"selected_date": "2023-10-26", "selected_slot": "14:00"}`
-
-**7.2. SQLite (Admin Service's Database)**
-*   **Table:** `slots`
-    *   `id INTEGER PRIMARY KEY AUTOINCREMENT`
-    *   `time TEXT NOT NULL`
-    *   `place TEXT NOT NULL`
-    *   `max_user INTEGER NOT NULL`
-*   **Table:** `users`
-    *   `id INTEGER PRIMARY KEY AUTOINCREMENT`
-    *   `name TEXT NOT NULL`
-    *   `telegram_id INTEGER UNIQUE`
-*   **Table:** `records`
-    *   `id INTEGER PRIMARY KEY AUTOINCREMENT`
-    *   `user_id INTEGER NOT NULL`
-    *   `slot_id INTEGER`
-
-### 8. API / Integration Details
-
-**8.1. REST API Endpoints (Provided by Admin Service)**
-*   `GET /slots`: Get all available slots.
-*   `POST /slots`: Create a new slot.
-*   `POST /bookings`: Create a new booking.
-*   `GET /users`: Get all users.
-*   `POST /users`: Create a new user.
-
-### 9. Deployment Considerations
-
-*   The Bot will run as a single, long-running process.
-*   All time-based logic (slot closure, 12:00 notifications) must use the MSK (Moscow Time) timezone.
-*   The Bot must be deployed in an environment with stable connectivity to the Telegram API and Redis.
-
----
-This specification provides a solid foundation for development. The next step would be to break these requirements down into specific tasks for implementation.
+- **Единая точка входа** для всех Telegram-операций
+- **Упрощенное развертывание** - меньше сервисов
+- **Переиспользование кода** - общие зависимости
+- **Четкое разделение ответственности**:
+  - Event Worker: координация рассылок
+  - Telegram Bot: отправка сообщений
+  - Admin Panel: управление данными
