@@ -170,6 +170,32 @@ const Broadcast: React.FC = () => {
     }
   };
 
+  const handleDeleteBroadcast = async (broadcastId: string) => {
+    if (!window.confirm('Вы уверены, что хотите удалить эту рассылку? Это действие нельзя отменить.')) {
+      return;
+    }
+
+    try {
+      await broadcastApi.delete(broadcastId);
+      
+      // Если удаляем текущую рассылку, очищаем состояние
+      if (currentBroadcast && currentBroadcast.broadcast_id === broadcastId) {
+        setCurrentBroadcast(null);
+        setBroadcastStatus(null);
+        if (pollingInterval) {
+          clearInterval(pollingInterval);
+          setPollingInterval(null);
+        }
+      }
+      
+      // Обновляем историю
+      loadBroadcastHistory();
+    } catch (err) {
+      setError('Ошибка при удалении рассылки');
+      console.error('Delete broadcast error:', err);
+    }
+  };
+
   const getStatusIcon = (status: BroadcastStatus) => {
     switch (status) {
       case 'pending':
@@ -487,14 +513,22 @@ const Broadcast: React.FC = () => {
                         <span className="text-yellow-600">{broadcast.pending_count} ⏳</span>
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                      <button
-                        onClick={() => handleViewDetails(broadcast.id)}
-                        className="text-blue-600 hover:text-blue-900"
-                      >
-                        Детали
-                      </button>
-                    </td>
+                                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                       <div className="flex space-x-2">
+                         <button
+                           onClick={() => handleViewDetails(broadcast.id)}
+                           className="text-blue-600 hover:text-blue-900"
+                         >
+                           Детали
+                         </button>
+                         <button
+                           onClick={() => handleDeleteBroadcast(broadcast.id)}
+                           className="text-red-600 hover:text-red-900"
+                         >
+                           Удалить
+                         </button>
+                       </div>
+                     </td>
                   </tr>
                 ))}
               </tbody>

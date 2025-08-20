@@ -24,6 +24,8 @@ pub use db::{
     create_broadcast_message, update_broadcast_message, get_broadcast_messages,
     // Command handlers
     handle_create_broadcast, handle_retry_message, handle_cancel_broadcast,
+    // Delete functions
+    delete_broadcast,
     // Query handlers
     handle_get_broadcast_status, handle_get_broadcast_messages,
 };

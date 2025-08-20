@@ -77,8 +77,9 @@ async fn main() {
         .route("/users", get(get_users).post(create_user))
         .route("/users/{id}", put(update_user).delete(delete_user))
         // Event-Driven broadcast endpoints
-        .route("/broadcast", post(create_broadcast).get(get_all_broadcasts))
-        .route("/broadcast/{id}/status", get(get_broadcast_status))
+            .route("/broadcast", post(create_broadcast).get(get_all_broadcasts))
+    .route("/broadcast/{id}", delete(delete_broadcast))
+    .route("/broadcast/{id}/status", get(get_broadcast_status))
         .route("/broadcast/{id}/messages", get(get_broadcast_messages))
         .route("/broadcast/{id}/retry", post(retry_broadcast_message))
         .route("/broadcast/{id}/cancel", post(cancel_broadcast))
@@ -359,6 +360,31 @@ async fn create_broadcast(
     }
 
     Ok(Json(result))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/broadcast/{id}",
+    params(
+        ("id" = String, Path, description = "Broadcast ID")
+    ),
+    responses(
+        (status = 200, description = "Broadcast deleted successfully"),
+        (status = 404, description = "Broadcast not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+async fn delete_broadcast(
+    State(state): State<AppState>,
+    Path(broadcast_id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    match core_logic::db::delete_broadcast(&state.pool, &broadcast_id).await {
+        Ok(_) => Ok(StatusCode::OK),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to delete broadcast: {}", e),
+        )),
+    }
 }
 
 #[utoipa::path(

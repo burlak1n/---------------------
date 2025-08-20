@@ -82,12 +82,17 @@ export const bookingsApi = {
 
 // Event-Driven Broadcast API
 export const broadcastApi = {
-  // Получение всех рассылок
+    // Получение всех рассылок
   getAll: async (): Promise<BroadcastSummary[]> => {
     const response = await api.get<BroadcastSummary[]>('/broadcast');
     return response.data;
   },
-  
+
+  // Удаление рассылки
+  delete: async (broadcastId: string): Promise<void> => {
+    await api.delete(`/broadcast/${broadcastId}`);
+  },
+
   // Создание рассылки
   create: async (command: CreateBroadcastCommand): Promise<BroadcastCreatedResponse> => {
     const response = await api.post<BroadcastCreatedResponse>('/broadcast', command);

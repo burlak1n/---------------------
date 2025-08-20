@@ -753,3 +753,34 @@ pub async fn handle_get_broadcast_messages(
     
     Ok(messages)
 }
+
+pub async fn delete_broadcast(
+    pool: &SqlitePool,
+    broadcast_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Удаляем сообщения рассылки
+    sqlx::query!(
+        "DELETE FROM broadcast_messages WHERE broadcast_id = ?",
+        broadcast_id
+    )
+    .execute(pool)
+    .await?;
+
+    // Удаляем события рассылки
+    sqlx::query!(
+        "DELETE FROM broadcast_events WHERE broadcast_id = ?",
+        broadcast_id
+    )
+    .execute(pool)
+    .await?;
+
+    // Удаляем сводку рассылки
+    sqlx::query!(
+        "DELETE FROM broadcast_summaries WHERE id = ?",
+        broadcast_id
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
