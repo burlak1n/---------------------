@@ -1,3 +1,4 @@
 {
-  "migrations": "./migrations"
+  "migrations": "./migrations",
+  "database": "./database.db"
 }

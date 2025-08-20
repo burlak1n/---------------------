@@ -1,5 +1,17 @@
 pub mod db;
 
+pub use db::{
+    get_available_slots,
+    get_slot,
+    create_or_update_booking,
+    create_slot,
+    create_booking,
+    get_users,
+    create_user,
+    get_user_by_telegram_id,
+    get_todays_bookings,
+};
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;

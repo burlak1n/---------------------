@@ -1,4 +1,3 @@
-use serde::Serialize;
 use std::env;
 use std::sync::Arc;
 use teloxide::prelude::*;
@@ -55,7 +54,7 @@ async fn callback_handler(
         if data == "sign_up" {
             handle_sign_up(&q, bot, pool).await?;
         } else if data.starts_with("book_") {
-            handle_slot_selection(&q, bot, data).await?;
+            handle_slot_selection(&q, bot, data, pool).await?;
         } else if data.starts_with("confirm_") {
             handle_confirm_booking(&q, bot, data, pool).await?;
         }
@@ -73,7 +72,10 @@ async fn handle_sign_up(q: &CallbackQuery, bot: Bot, pool: Arc<SqlitePool>) -> R
                 let mut keyboard_buttons = vec![];
 
                 for slot in slots.iter().take(3) {
-                    let text = format!("{} at {} ({})", "Date", slot.time, slot.place);
+                    let text = format!("📅 {} | 🏢 {}", 
+                        slot.time, 
+                        slot.place
+                    );
                     let callback_data = format!("book_{}", slot.id);
                     keyboard_buttons.push(vec![InlineKeyboardButton::new(
                         text,
@@ -99,24 +101,41 @@ async fn handle_sign_up(q: &CallbackQuery, bot: Bot, pool: Arc<SqlitePool>) -> R
     Ok(())
 }
 
-async fn handle_slot_selection(q: &CallbackQuery, bot: Bot, data: &str) -> ResponseResult<()> {
+async fn handle_slot_selection(q: &CallbackQuery, bot: Bot, data: &str, pool: Arc<SqlitePool>) -> ResponseResult<()> {
     bot.answer_callback_query(q.id.clone()).await?;
 
     let parts: Vec<&str> = data.split('_').collect();
     if parts.len() == 2 {
-        let slot_id = parts[1];
+        if let Ok(slot_id) = parts[1].parse::<i64>() {
+            if let Some(msg) = &q.message {
+                // Получаем информацию о слоте из БД
+                match core_logic::db::get_slot(&pool, slot_id).await {
+                    Ok(Some(slot)) => {
+                        let text = format!("📋 Выбранный слот:\n\n📅 Время: {}\n🏢 Место: {}\n\nНажмите 'Подтвердить' для завершения записи.", 
+                            slot.time, 
+                            slot.place
+                        );
+                        let confirm_callback_data = format!("confirm_{}", slot_id);
+                        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::new(
+                            "Подтвердить",
+                            InlineKeyboardButtonKind::CallbackData(confirm_callback_data),
+                        )]]);
 
-        if let Some(msg) = &q.message {
-            let text = format!("You have selected slot {}. Please confirm.", slot_id);
-            let confirm_callback_data = format!("confirm_{}", slot_id);
-            let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::new(
-                "Confirm",
-                InlineKeyboardButtonKind::CallbackData(confirm_callback_data),
-            )]]);
-
-            bot.edit_message_text(msg.chat().id, msg.id(), text)
-                .reply_markup(keyboard)
-                .await?;
+                        bot.edit_message_text(msg.chat().id, msg.id(), text)
+                            .reply_markup(keyboard)
+                            .await?;
+                    }
+                    Ok(None) => {
+                        bot.edit_message_text(msg.chat().id, msg.id(), "❌ Слот не найден. Попробуйте выбрать другой слот.")
+                            .await?;
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to get slot: {}", e);
+                        bot.edit_message_text(msg.chat().id, msg.id(), "❌ Ошибка при получении информации о слоте. Попробуйте позже.")
+                            .await?;
+                    }
+                }
+            }
         }
     }
 
@@ -152,15 +171,40 @@ async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str, pool: A
                         }
                     };
 
-                    let text = format!("Success! Your booking is confirmed for {} at {}.\nUse /reschedule to change your slot.", "Date", slot.time);
-                    if let Err(e) = core_logic::db::create_or_update_booking(&pool, user.id, Some(slot_id)).await {
-                        tracing::error!("Failed to create or update booking: {}", e);
-                        return Ok(())
+                    match core_logic::db::create_or_update_booking(&pool, user.id, Some(slot_id)).await {
+                        Ok(_) => {
+                            let success_text = format!("🎉 Бронирование подтверждено!\n\n📅 Время: {}\n🏢 Место: {}\n👤 Имя: {}\n\nИспользуйте /reschedule для изменения времени.", 
+                                slot.time, 
+                                slot.place,
+                                user.name
+                            );
+                            bot.edit_message_text(msg.chat().id, msg.id(), success_text)
+                                .reply_markup(InlineKeyboardMarkup::new(vec![vec![]]))
+                                .await?;
+                        }
+                        Err(e) => {
+                            let error_message = match e {
+                                core_logic::BookingError::SlotFull { max_users, current_count } => {
+                                    format!("❌ Слот переполнен!\n\nМаксимальное количество пользователей: {}\nТекущее количество: {}\n\nПопробуйте выбрать другой слот или обратитесь к администратору.", max_users, current_count)
+                                }
+                                core_logic::BookingError::SlotNotFound => {
+                                    "❌ Слот не найден. Возможно, он был удален. Попробуйте выбрать другой слот.".to_string()
+                                }
+                                core_logic::BookingError::UserNotFound => {
+                                    "❌ Пользователь не найден. Попробуйте начать заново с команды /start.".to_string()
+                                }
+                                core_logic::BookingError::Database(db_error) => {
+                                    format!("❌ Ошибка базы данных: {}\n\nПопробуйте позже или обратитесь к администратору.", db_error)
+                                }
+                            };
+                            
+                            bot.edit_message_text(msg.chat().id, msg.id(), error_message)
+                                .reply_markup(InlineKeyboardMarkup::new(vec![vec![
+                                    InlineKeyboardButton::new("Попробовать снова", InlineKeyboardButtonKind::CallbackData("sign_up".to_string()))
+                                ]]))
+                                .await?;
+                        }
                     }
-
-                    bot.edit_message_text(msg.chat().id, msg.id(), text)
-                        .reply_markup(InlineKeyboardMarkup::new(vec![vec![]]))
-                        .await?;
                 }
             }
         }
@@ -192,7 +236,10 @@ async fn notification_scheduler(bot: Bot, pool: Arc<SqlitePool>) {
         };
 
         for booking in bookings {
-            let message = format!("Reminder: You have an interview today at {} at {}.", booking.time, booking.place);
+            let message = format!("🔔 Напоминание о собеседовании!\n\n📅 Сегодня в {}\n🏢 Место: {}\n\nУдачи на собеседовании! 🍀", 
+                booking.time, 
+                booking.place
+            );
             if let Err(e) = bot.send_message(ChatId(booking.telegram_id), message).await {
                 tracing::error!("Failed to send reminder to user {}: {}", booking.telegram_id, e);
             }

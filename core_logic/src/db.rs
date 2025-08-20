@@ -96,7 +96,7 @@ pub async fn create_slot(pool: &SqlitePool, payload: CreateSlotRequest) -> Resul
     get_slot(pool, id).await.map(|s| s.unwrap())
 }
 
-pub async fn create_booking(pool: &SqlitePool, payload: CreateBookingRequest) -> Result<Booking, sqlx::Error> {
+pub async fn create_booking(pool: &SqlitePool, payload: CreateBookingRequest) -> Result<Booking, BookingError> {
     let slot_id = payload.slot_id.parse::<i64>().unwrap();
 
     create_or_update_booking(pool, payload.user_id, Some(slot_id)).await?;
