@@ -11,7 +11,7 @@ pub struct Slot {
     pub id: i64,
     pub time: String,
     pub place: String,
-    pub max_user: i64,
+    pub max_user: u16,
 }
 
 // Структура перенесена из telegram_bot/src/db.rs
@@ -44,7 +44,7 @@ pub struct EventTime {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ApiSlot {
     pub start_time: DateTime<Utc>,
-    pub title: String,
+    pub place: String,
 }
 
 
@@ -117,7 +117,8 @@ pub struct ErrorResponse {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateSlotRequest {
     pub start_time: DateTime<Utc>,
-    pub title: String,
+    pub place: String,
+    pub max_users: u16,
 }
 
 // Новая структура для запроса на создание бронирования
@@ -138,7 +139,7 @@ pub struct CreateUserRequest {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateSlotRequest {
     pub start_time: Option<DateTime<Utc>>,
-    pub title: Option<String>,
+    pub place: Option<String>,
 }
 
 // Новая структура для запроса на обновление бронирования
@@ -151,7 +152,7 @@ pub struct UpdateBookingRequest {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateUserRequest {
     pub name: Option<String>,
-    pub email: Option<String>,
+    pub telegram_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize, ToSchema)]

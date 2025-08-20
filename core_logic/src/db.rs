@@ -19,7 +19,9 @@ pub async fn init_db() -> Result<SqlitePool, anyhow::Error> {
 
 pub async fn get_available_slots(pool: &SqlitePool) -> Result<Vec<Slot>, sqlx::Error> {
     sqlx::query_as::<_, Slot>(
-        "SELECT s.id, s.time, s.place, s.max_user FROM slots s LEFT JOIN records r ON s.id = r.slot_id GROUP BY s.id HAVING COUNT(r.id) < s.max_user"
+        "SELECT s.id, s.time, s.place, s.max_user 
+         FROM slots s 
+         WHERE (SELECT COUNT(*) FROM records r WHERE r.slot_id = s.id) < s.max_user"
     )
     .fetch_all(pool)
     .await
@@ -41,11 +43,19 @@ pub async fn create_or_update_booking(pool: &SqlitePool, user_id: i64, slot_id: 
     
     // Затем создаем новую запись
     if let Some(slot_id) = slot_id {
-        sqlx::query("INSERT INTO records (user_id, slot_id) VALUES (?, ?)")
-            .bind(user_id)
-            .bind(slot_id)
-            .execute(pool)
-            .await?;
+        // Проверяем лимит и создаем запись в одной транзакции
+        let result = sqlx::query!(
+            "INSERT INTO records (user_id, slot_id) 
+             SELECT ?, ? 
+             WHERE (SELECT COUNT(*) FROM records WHERE slot_id = ?) < (SELECT max_user FROM slots WHERE id = ?)",
+            user_id, slot_id, slot_id, slot_id
+        )
+        .execute(pool)
+        .await?;
+        
+        if result.rows_affected() == 0 {
+            return Err(sqlx::Error::RowNotFound);
+        }
     }
     
     Ok(())
@@ -55,8 +65,8 @@ pub async fn create_or_update_booking(pool: &SqlitePool, user_id: i64, slot_id: 
 
 pub async fn create_slot(pool: &SqlitePool, payload: CreateSlotRequest) -> Result<Slot, sqlx::Error> {
     let time = payload.start_time.to_rfc3339();
-    let place = payload.title;
-    let max_user = 1;
+    let place = payload.place;
+    let max_user = payload.max_users;
     let id = sqlx::query!(
         "INSERT INTO slots (time, place, max_user) VALUES (?, ?, ?)",
         time, place, max_user

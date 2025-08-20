@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS slots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     time TEXT NOT NULL,
     place TEXT NOT NULL,
-    max_user INTEGER NOT NULL CHECK (max_user > 0)
+    max_user INTEGER NOT NULL CHECK (max_user > 0 AND max_user <= 65535)
 );
 
 -- Создание таблицы пользователей
@@ -28,6 +28,10 @@ CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id);
 CREATE INDEX IF NOT EXISTS idx_records_user_id ON records(user_id);
 CREATE INDEX IF NOT EXISTS idx_records_slot_id ON records(slot_id);
 CREATE INDEX IF NOT EXISTS idx_records_created_at ON records(created_at);
+
+-- Составные индексы для сложных запросов
+CREATE INDEX IF NOT EXISTS idx_records_slot_user ON records(slot_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_slots_time_place ON slots(time, place);
 
 -- Создание уникального ограничения на одну запись пользователя на слот
 CREATE UNIQUE INDEX IF NOT EXISTS idx_records_user_slot_unique ON records(user_id, slot_id) WHERE slot_id IS NOT NULL;
