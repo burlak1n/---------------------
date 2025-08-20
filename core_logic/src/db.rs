@@ -26,7 +26,8 @@ pub async fn init_db() -> Result<SqlitePool, anyhow::Error> {
 
 pub async fn get_available_slots(pool: &SqlitePool) -> Result<Vec<Slot>, sqlx::Error> {
     sqlx::query_as::<_, Slot>(
-        "SELECT s.id, s.time, s.place, s.max_user 
+        "SELECT s.id, s.time, s.place, s.max_user, 
+                COALESCE((SELECT COUNT(*) FROM records r WHERE r.slot_id = s.id), 0) as booked_count
          FROM slots s 
          WHERE (SELECT COUNT(*) FROM records r WHERE r.slot_id = s.id) < s.max_user"
     )
@@ -34,11 +35,37 @@ pub async fn get_available_slots(pool: &SqlitePool) -> Result<Vec<Slot>, sqlx::E
     .await
 }
 
+pub async fn get_all_slots(pool: &SqlitePool) -> Result<Vec<Slot>, sqlx::Error> {
+    sqlx::query_as::<_, Slot>(
+        "SELECT s.id, s.time, s.place, s.max_user, 
+                COALESCE((SELECT COUNT(*) FROM records r WHERE r.slot_id = s.id), 0) as booked_count
+         FROM slots s 
+         ORDER BY s.time ASC"
+    )
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn get_slot(pool: &SqlitePool, slot_id: i64) -> Result<Option<Slot>, sqlx::Error> {
-    sqlx::query_as::<_, Slot>("SELECT * FROM slots WHERE id = ?")
-        .bind(slot_id)
-        .fetch_optional(pool)
-        .await
+    println!("DB: Получаем слот {}", slot_id);
+    
+    let result = sqlx::query_as::<_, Slot>(
+        "SELECT s.id, s.time, s.place, s.max_user, 
+                COALESCE((SELECT COUNT(*) FROM records r WHERE r.slot_id = s.id), 0) as booked_count
+         FROM slots s 
+         WHERE s.id = ?"
+    )
+    .bind(slot_id)
+    .fetch_optional(pool)
+    .await;
+    
+    match &result {
+        Ok(Some(slot)) => println!("DB: Получен слот: {:?}", slot),
+        Ok(None) => println!("DB: Слот {} не найден", slot_id),
+        Err(e) => println!("DB: Ошибка при получении слота {}: {}", slot_id, e),
+    }
+    
+    result
 }
 
 pub async fn create_or_update_booking(pool: &SqlitePool, user_id: i64, slot_id: Option<i64>) -> Result<(), BookingError> {
@@ -154,32 +181,50 @@ pub async fn get_all_bookings(pool: &SqlitePool) -> Result<Vec<Record>, sqlx::Er
 }
 
 pub async fn update_slot(pool: &SqlitePool, slot_id: i64, payload: UpdateSlotRequest) -> Result<Slot, sqlx::Error> {
-    let mut query = String::from("UPDATE slots SET ");
-    let mut conditions = Vec::new();
-    let mut params: Vec<Box<dyn sqlx::Encode<'_, Sqlite> + Send + Sync>> = Vec::new();
-
-    if let Some(time) = payload.start_time {
-        conditions.push("time = ?");
-        params.push(Box::new(time));
-    }
-
-    if let Some(place) = payload.place {
-        conditions.push("place = ?");
-        params.push(Box::new(place));
-    }
-
-    if conditions.is_empty() {
-        return get_slot(pool, slot_id).await.map(|s| s.unwrap());
-    }
-
-    query.push_str(&conditions.join(", "));
-    query.push_str(" WHERE id = ?");
-    params.push(Box::new(slot_id));
-
-    sqlx::query(&query)
-        .execute(pool)
+    println!("DB: Обновляем слот {} с данными: {:?}", slot_id, payload);
+    
+    // Если обновляется max_users, проверяем что новое значение не меньше текущего количества записанных
+    if let Some(max_users) = payload.max_users {
+        let current_booked: i64 = sqlx::query_scalar!(
+            "SELECT COUNT(*) FROM records WHERE slot_id = ?",
+            slot_id
+        )
+        .fetch_one(pool)
         .await?;
+        
+        println!("DB: Текущее количество записанных в слот {}: {}", slot_id, current_booked);
+        
+        if max_users < current_booked as u16 {
+            return Err(sqlx::Error::Protocol(
+                format!("Нельзя установить максимальное количество участников меньше {} (уже записано)", current_booked).into()
+            ));
+        }
+    }
+    
+    // Выполняем обновления по отдельности для каждого поля
+    if let Some(time) = payload.start_time {
+        println!("DB: Обновляем время слота {} на {}", slot_id, time);
+        sqlx::query!("UPDATE slots SET time = ? WHERE id = ?", time, slot_id)
+            .execute(pool)
+            .await?;
+    }
+    
+    if let Some(place) = payload.place {
+        println!("DB: Обновляем место слота {} на '{}'", slot_id, place);
+        sqlx::query!("UPDATE slots SET place = ? WHERE id = ?", place, slot_id)
+            .execute(pool)
+            .await?;
+    }
+    
+    if let Some(max_users) = payload.max_users {
+        println!("DB: Обновляем max_user слота {} на {}", slot_id, max_users);
+        sqlx::query!("UPDATE slots SET max_user = ? WHERE id = ?", max_users, slot_id)
+            .execute(pool)
+            .await?;
+    }
 
+    println!("DB: Получаем обновленный слот {}", slot_id);
+    // Возвращаем обновленный слот
     get_slot(pool, slot_id).await.map(|s| s.unwrap())
 }
 
@@ -712,6 +757,7 @@ pub async fn get_broadcast_messages(
             error: row.error,
             sent_at: row.sent_at,
             retry_count: row.retry_count.unwrap_or(0),
+            message_type: None,
             created_at: row.created_at.unwrap_or_else(|| chrono::Utc::now().naive_utc()),
         })
         .collect()
@@ -741,6 +787,7 @@ pub async fn get_broadcast_messages(
             error: row.error,
             sent_at: row.sent_at,
             retry_count: row.retry_count.unwrap_or(0),
+            message_type: None,
             created_at: row.created_at.unwrap_or_else(|| chrono::Utc::now().naive_utc()),
         })
         .collect()
@@ -798,6 +845,7 @@ pub async fn handle_create_broadcast(
             error: None,
             sent_at: None,
             retry_count: 0,
+            message_type: None, // Пока не используем тип сообщения
             created_at: chrono::Utc::now().naive_utc(),
         };
         

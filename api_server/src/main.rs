@@ -4,6 +4,9 @@ use axum::{
     Router,
     Json,
     http::StatusCode,
+    response::{Response},
+    http::Request,
+    middleware::{self, Next},
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -22,6 +25,7 @@ use sqlx::SqlitePool;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 use tower_http::cors::{CorsLayer, Any};
+use serde_json::Error as JsonError;
 
 // Состояние приложения
 #[derive(Clone)]
@@ -30,10 +34,34 @@ struct AppState {
     rabbitmq: Arc<RabbitMQClient>,
 }
 
+// Middleware для обработки ошибок JSON
+async fn json_error_handler(
+    req: Request<axum::body::Body>,
+    next: Next,
+) -> Result<Response, (StatusCode, String)> {
+    let response = next.run(req).await;
+    
+    // Если это ошибка десериализации, возвращаем более понятное сообщение
+    if let Some(error) = response.extensions().get::<JsonError>() {
+        let error_msg = if error.to_string().contains("start_time") {
+            "Ошибка в поле 'start_time': ожидается корректная дата в формате ISO 8601 (например: 2024-01-15T10:30:00Z)"
+        } else if error.to_string().contains("premature end of input") {
+            "Неполный JSON: проверьте, что все обязательные поля заполнены"
+        } else {
+            &format!("Ошибка в JSON: {}", error)
+        };
+        
+        return Err((StatusCode::BAD_REQUEST, error_msg.to_string()));
+    }
+    
+    Ok(response)
+}
+
 #[derive(OpenApi)]
 #[openapi(
     paths(
         get_slots,
+        get_all_slots,
         create_slot,
         create_booking,
         get_users,
@@ -71,6 +99,7 @@ async fn main() {
     let app = Router::new()
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .route("/slots", get(get_slots).post(create_slot))
+        .route("/slots/all", get(get_all_slots))
         .route("/slots/{id}", put(update_slot).delete(delete_slot))
         .route("/bookings", post(create_booking).get(get_bookings))
         .route("/bookings/{id}", delete(delete_booking))
@@ -84,11 +113,14 @@ async fn main() {
         .route("/broadcast/{id}/retry", post(retry_broadcast_message))
         .route("/broadcast/{id}/cancel", post(cancel_broadcast))
         .layer(cors)
+        .layer(middleware::from_fn(json_error_handler))
         .with_state(state);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-    println!("listening on {}", addr);
+    println!("🚀 API сервер запускается на {}", addr);
+    println!("📝 Логирование включено");
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    println!("✅ Сервер готов принимать соединения");
     axum::serve(listener, app).await.unwrap();
 }
 
@@ -100,12 +132,43 @@ async fn main() {
     )
 )]
 async fn get_slots(State(state): State<AppState>) -> Result<Json<Vec<Slot>>, (StatusCode, String)> {
+    println!("📋 GET /slots - получение доступных слотов");
     match core_logic::db::get_available_slots(&state.pool).await {
-        Ok(slots) => Ok(Json(slots)),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Database error: {}", e),
-        )),
+        Ok(slots) => {
+            println!("✅ Получено {} доступных слотов", slots.len());
+            Ok(Json(slots))
+        },
+        Err(e) => {
+            println!("❌ Ошибка при получении слотов: {}", e);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Database error: {}", e),
+            ))
+        },
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/slots/all",
+    responses(
+        (status = 200, description = "List all slots", body = [Slot])
+    )
+)]
+async fn get_all_slots(State(state): State<AppState>) -> Result<Json<Vec<Slot>>, (StatusCode, String)> {
+    println!("📋 GET /slots/all - получение всех слотов");
+    match core_logic::db::get_all_slots(&state.pool).await {
+        Ok(slots) => {
+            println!("✅ Получено {} всех слотов", slots.len());
+            Ok(Json(slots))
+        },
+        Err(e) => {
+            println!("❌ Ошибка при получении всех слотов: {}", e);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Database error: {}", e),
+            ))
+        },
     }
 }
 
@@ -118,11 +181,33 @@ async fn get_slots(State(state): State<AppState>) -> Result<Json<Vec<Slot>>, (St
     )
 )]
 async fn create_slot(State(state): State<AppState>, Json(payload): Json<CreateSlotRequest>) -> Result<Json<Slot>, (StatusCode, String)> {
+    // Валидация входных данных
+    if payload.start_time.timestamp() < chrono::Utc::now().timestamp() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Дата начала слота не может быть в прошлом".to_string(),
+        ));
+    }
+    
+    if payload.place.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Место проведения не может быть пустым".to_string(),
+        ));
+    }
+    
+    if payload.max_users == 0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Максимальное количество пользователей должно быть больше 0".to_string(),
+        ));
+    }
+    
     match core_logic::db::create_slot(&state.pool, payload).await {
         Ok(slot) => Ok(Json(slot)),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Database error: {}", e),
+            format!("Ошибка базы данных: {}", e),
         )),
     }
 }
@@ -234,12 +319,20 @@ async fn update_slot(
     Path(slot_id): Path<i64>, 
     Json(payload): Json<UpdateSlotRequest>
 ) -> Result<Json<Slot>, (StatusCode, String)> {
+    println!("Обновляем слот {} с данными: {:?}", slot_id, payload);
+    
     match core_logic::db::update_slot(&state.pool, slot_id, payload).await {
-        Ok(slot) => Ok(Json(slot)),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Database error: {}", e),
-        )),
+        Ok(slot) => {
+            println!("Слот {} успешно обновлен: {:?}", slot_id, slot);
+            Ok(Json(slot))
+        },
+        Err(e) => {
+            println!("Ошибка при обновлении слота {}: {}", slot_id, e);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Database error: {}", e),
+            ))
+        },
     }
 }
 

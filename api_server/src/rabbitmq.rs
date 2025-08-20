@@ -7,7 +7,7 @@ use tokio::time::timeout;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use core_logic::{BroadcastMessage, BroadcastResult, User, BroadcastEvent};
+use core_logic::{BroadcastMessage, BroadcastResult, User, BroadcastEvent, BroadcastMessageType};
 
 const BROADCAST_QUEUE_NAME: &str = "telegram_broadcast";
 const BROADCAST_EXCHANGE_NAME: &str = "telegram_broadcast_exchange";
@@ -183,6 +183,7 @@ impl RabbitMQClient {
                 telegram_id: user.telegram_id,
                 message: message.clone(),
                 broadcast_id: broadcast_id.clone(),
+                message_type: Some(BroadcastMessageType::Custom),
                 created_at: chrono::Utc::now(),
             };
 

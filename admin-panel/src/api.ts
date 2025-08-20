@@ -16,7 +16,6 @@ import type {
   BroadcastStatusResponse,
   BroadcastMessageRecord,
   RetryMessageCommand,
-  CancelBroadcastCommand,
   BroadcastSummary,
 } from './types';
 
@@ -33,16 +32,47 @@ export const slotsApi = {
     const response = await api.get<Slot[]>('/slots');
     return response.data;
   },
-  create: async (slot: CreateSlotRequest): Promise<Slot> => {
-    const response = await api.post<Slot>('/slots', slot);
+  getAllSlots: async (): Promise<Slot[]> => {
+    const response = await api.get<Slot[]>('/slots/all');
     return response.data;
+  },
+  create: async (slot: CreateSlotRequest): Promise<Slot> => {
+    try {
+      const response = await api.post<Slot>('/slots', slot);
+      return response.data;
+    } catch (error: any) {
+      if (error.response?.data) {
+        throw new Error(error.response.data);
+      }
+      throw new Error('Ошибка при создании слота');
+    }
   },
   update: async (id: number, slot: UpdateSlotRequest): Promise<Slot> => {
-    const response = await api.put<Slot>(`/slots/${id}`, slot);
-    return response.data;
+    try {
+      console.log(`Отправляем PUT запрос на /slots/${id}:`, slot);
+      const response = await api.put<Slot>(`/slots/${id}`, slot);
+      console.log('Ответ сервера:', response.data);
+      return response.data;
+    } catch (error: any) {
+      console.error('Ошибка API при обновлении слота:', error);
+      if (error.response?.data) {
+        throw new Error(error.response.data);
+      }
+      if (error.response?.status) {
+        throw new Error(`HTTP ${error.response.status}: ${error.message}`);
+      }
+      throw new Error('Ошибка при обновлении слота');
+    }
   },
   delete: async (id: number): Promise<void> => {
-    await api.delete(`/slots/${id}`);
+    try {
+      await api.delete(`/slots/${id}`);
+    } catch (error: any) {
+      if (error.response?.data) {
+        throw new Error(error.response.data);
+      }
+      throw new Error('Ошибка при удалении слота');
+    }
   },
 };
 

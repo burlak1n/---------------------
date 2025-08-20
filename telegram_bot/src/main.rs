@@ -15,8 +15,6 @@ mod broadcast;
 enum Command {
     #[command(description = "Display this text.")]
     Help,
-    #[command(description = "Start or restart the booking process.")]
-    Start,
     #[command(description = "Get contact information.")]
     Contact,
     #[command(description = "Reschedule your interview.")]
@@ -50,10 +48,10 @@ impl UserMessage {
             UserMessage::SlotSelected { time, place } => format!("📋 Выбранный слот:\n\n📅 Время: {}\n🏢 Место: {}\n\nНажмите 'Подтвердить' для завершения записи.", time, place),
             UserMessage::SlotNotFound => "❌ Слот не найден. Попробуйте выбрать другой слот.".to_string(),
             UserMessage::SlotError => "❌ Ошибка при получении информации о слоте. Попробуйте позже.".to_string(),
-            UserMessage::BookingConfirmed { time, place, name: _ } => format!("🎉 Бронирование подтверждено!\n\n📅 Время: {}\n🏢 Место: {}\n\nИспользуйте /reschedule для изменения времени.", time, place),
+            UserMessage::BookingConfirmed { time, place, name: _ } => format!("🎉 Бронирование подтверждено!\n\n📅 Время: {}\n🏢 Место: {}\n\nОбратитесь к администратору для изменения времени.", time, place),
             UserMessage::SlotFull { max_users, current_count } => format!("❌ Слот переполнен!\n\nМаксимальное количество пользователей: {}\nТекущее количество: {}\n\nПопробуйте выбрать другой слот или обратитесь к администратору.", max_users, current_count),
             UserMessage::SlotNotFoundError => "❌ Слот не найден. Возможно, он был удален. Попробуйте выбрать другой слот.".to_string(),
-            UserMessage::UserNotFound => "❌ Пользователь не найден. Попробуйте начать заново с команды /start.".to_string(),
+            UserMessage::UserNotFound => "❌ Пользователь не найден. Обратитесь к администратору.".to_string(),
             UserMessage::DatabaseError(error) => format!("❌ Ошибка базы данных: {}\n\nПопробуйте позже или обратитесь к администратору.", error),
             UserMessage::Reminder { time, place } => format!("🔔 Напоминание о собеседовании!\n\n📅 Сегодня в {}\n🏢 Место: {}\n\nУдачи на собеседовании! 🍀", time, place),
         }
@@ -65,7 +63,7 @@ async fn command_handler(bot: Bot, msg: Message, cmd: Command) -> ResponseResult
         Command::Help => {
             bot.send_message(msg.chat.id, Command::descriptions().to_string()).await?;
         }
-        Command::Start | Command::Reschedule => {
+        Command::Reschedule => {
             let keyboard = InlineKeyboardMarkup::new(vec![vec![
                 InlineKeyboardButton::new("Записаться", InlineKeyboardButtonKind::CallbackData("sign_up".to_string())),
             ]]);

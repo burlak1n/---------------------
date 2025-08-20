@@ -177,10 +177,28 @@ async fn send_telegram_message(
     if let Some(telegram_id) = message.telegram_id {
         info!("Sending message to Telegram user {}", telegram_id);
         
-        let result = bot.send_message(
-            teloxide::types::ChatId(telegram_id),
-            &message.message,
-        ).await;
+        let result = if let Some(core_logic::BroadcastMessageType::SignUp) = message.message_type {
+            // Для сообщений о записи создаем inline клавиатуру
+            let keyboard = teloxide::types::InlineKeyboardMarkup::new(vec![vec![
+                teloxide::types::InlineKeyboardButton::new(
+                    "Записаться",
+                    teloxide::types::InlineKeyboardButtonKind::CallbackData("sign_up".to_string()),
+                ),
+            ]]);
+            
+            bot.send_message(
+                teloxide::types::ChatId(telegram_id),
+                &message.message,
+            )
+            .reply_markup(keyboard)
+            .await
+        } else {
+            // Для обычных сообщений отправляем без клавиатуры
+            bot.send_message(
+                teloxide::types::ChatId(telegram_id),
+                &message.message,
+            ).await
+        };
 
         match result {
             Ok(_) => {

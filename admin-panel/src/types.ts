@@ -3,6 +3,7 @@ export interface Slot {
   time: string; // ISO string
   place: string;
   max_user: number;
+  booked_count?: number; // Количество забронированных мест
 }
 
 export interface User {
@@ -61,27 +62,24 @@ export interface BroadcastRequest {
 }
 
 export interface BroadcastResponse {
-  broadcast_id: string;
-  total_users: number;
-  sent_count: number;
-  failed_count: number;
-  errors: string[];
-  completed_at: string;
+  success: boolean;
+  message: string;
+  users_count: number;
+  users_with_telegram: number;
+  users_without_telegram: number;
 }
 
-// Event-Driven Architecture Types
-
+// Event-Driven Broadcast Types
 export interface CreateBroadcastCommand {
   message: string;
   include_users_without_telegram: boolean;
+  message_type?: 'custom' | 'signup';
 }
 
 export interface BroadcastCreatedResponse {
   broadcast_id: string;
   status: BroadcastStatus;
 }
-
-export type BroadcastStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
 
 export interface BroadcastSummary {
   id: string;
@@ -96,7 +94,10 @@ export interface BroadcastSummary {
   completed_at?: string;
 }
 
-export type MessageStatus = 'pending' | 'sent' | 'failed' | 'retrying';
+export interface BroadcastStatusResponse {
+  broadcast: BroadcastSummary;
+  messages: BroadcastMessageRecord[];
+}
 
 export interface BroadcastMessageRecord {
   id: number;
@@ -110,27 +111,11 @@ export interface BroadcastMessageRecord {
   created_at: string;
 }
 
-export interface BroadcastStatusResponse {
-  broadcast: BroadcastSummary;
-  messages: BroadcastMessageRecord[];
-}
+export type BroadcastStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
 
-export interface GetBroadcastStatusQuery {
-  broadcast_id: string;
-}
-
-export interface GetBroadcastMessagesQuery {
-  broadcast_id: string;
-  status?: MessageStatus;
-  limit?: number;
-  offset?: number;
-}
+export type MessageStatus = 'pending' | 'sent' | 'failed' | 'retrying';
 
 export interface RetryMessageCommand {
   broadcast_id: string;
   user_id: number;
-}
-
-export interface CancelBroadcastCommand {
-  broadcast_id: string;
 }

@@ -259,11 +259,20 @@ async fn handle_event(
                 if let Some(telegram_id) = user.telegram_id {
                     info!("Processing user {} (telegram_id: {}) for broadcast {}", user.id, telegram_id, broadcast_id);
                     
+                    // Определяем тип сообщения по содержимому
+                    let message_type = if summary.message.contains("записаться на собеседование") || 
+                                       summary.message.contains("🎉 Поздравляем") {
+                        Some(core_logic::BroadcastMessageType::SignUp)
+                    } else {
+                        Some(core_logic::BroadcastMessageType::Custom)
+                    };
+                    
                     let broadcast_message = BroadcastMessage {
                         user_id: user.id,
                         telegram_id: Some(telegram_id),
                         message: summary.message.clone(),
                         broadcast_id: broadcast_id.clone(),
+                        message_type,
                         created_at: chrono::Utc::now(),
                     };
                     

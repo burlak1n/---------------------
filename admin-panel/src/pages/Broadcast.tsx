@@ -99,6 +99,7 @@ const Broadcast: React.FC = () => {
       const command: CreateBroadcastCommand = {
         message: message.trim(),
         include_users_without_telegram: includeUsersWithoutTelegram,
+        message_type: 'custom',
       };
 
       const response = await broadcastApi.create(command);
@@ -122,8 +123,9 @@ const Broadcast: React.FC = () => {
 
     try {
       const command: CreateBroadcastCommand = {
-        message: "Поздравляем! Ты успешно прошёл анкетирование и можешь записаться на собеседование по кнопке ниже",
+        message: "🎉 Поздравляем! Вы успешно прошли анкетирование и можете записаться на собеседование. Нажмите кнопку ниже для записи.",
         include_users_without_telegram: includeUsersWithoutTelegram,
+        message_type: 'signup',
       };
 
       const response = await broadcastApi.create(command);
@@ -342,9 +344,8 @@ const Broadcast: React.FC = () => {
             
             <div className="text-sm text-gray-600 space-y-1">
               <p><strong>Создать рассылку:</strong> Отправка произвольного сообщения всем пользователям</p>
-              <p><strong>Рассылка о записи:</strong> Отправка стандартного сообщения с кнопкой записи на собеседование</p>
+              <p><strong>Рассылка о записи:</strong> Отправка уведомления о возможности записи на собеседование с кнопкой записи</p>
             </div>
-          </div>
 
             {currentBroadcast && currentBroadcast.status === 'pending' && (
               <button

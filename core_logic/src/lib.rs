@@ -2,6 +2,7 @@ pub mod db;
 
 pub use db::{
     get_available_slots,
+    get_all_slots,
     get_slot,
     create_or_update_booking,
     create_slot,
@@ -56,6 +57,7 @@ pub struct Slot {
     pub time: DateTime<Utc>,
     pub place: String,
     pub max_user: u16,
+    pub booked_count: Option<i64>,
 }
 
 // Структура перенесена из telegram_bot/src/db.rs
@@ -184,6 +186,7 @@ pub struct CreateUserRequest {
 pub struct UpdateSlotRequest {
     pub start_time: Option<DateTime<Utc>>,
     pub place: Option<String>,
+    pub max_users: Option<u16>,
 }
 
 // Новая структура для запроса на обновление бронирования
@@ -211,6 +214,7 @@ pub struct BroadcastMessage {
     pub telegram_id: Option<i64>,
     pub message: String,
     pub broadcast_id: String,
+    pub message_type: Option<BroadcastMessageType>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -333,6 +337,7 @@ pub struct BroadcastMessageRecord {
     pub error: Option<String>,
     pub sent_at: Option<NaiveDateTime>,
     pub retry_count: i64,
+    pub message_type: Option<BroadcastMessageType>,
     pub created_at: NaiveDateTime,
 }
 
@@ -373,6 +378,14 @@ impl From<String> for MessageStatus {
 pub struct CreateBroadcastCommand {
     pub message: String,
     pub include_users_without_telegram: bool,
+    pub message_type: Option<BroadcastMessageType>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum BroadcastMessageType {
+    Custom,
+    SignUp,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
