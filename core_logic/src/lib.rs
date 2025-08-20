@@ -290,6 +290,7 @@ pub struct BroadcastSummary {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum BroadcastStatus {
     Pending,
     InProgress,
@@ -334,6 +335,7 @@ pub struct BroadcastMessageRecord {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum MessageStatus {
     Pending,
     Sent,

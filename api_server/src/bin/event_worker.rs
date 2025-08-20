@@ -269,8 +269,11 @@ async fn handle_event(
             }
             
             // Обновляем статус рассылки в БД
+            info!("Updating broadcast {} status: sent={}, failed={}", broadcast_id, sent_count, failed_count);
             if let Err(e) = update_broadcast_status(pool, broadcast_id, sent_count, failed_count).await {
                 error!("Failed to update broadcast status: {}", e);
+            } else {
+                info!("Successfully updated broadcast {} status to completed", broadcast_id);
             }
         }
         
@@ -334,7 +337,11 @@ async fn update_message_status(
     success: bool,
     error: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let status = if success { "sent" } else { "failed" };
+    let status = if success { 
+        core_logic::MessageStatus::Sent.to_string() 
+    } else { 
+        core_logic::MessageStatus::Failed.to_string() 
+    };
     let sent_at = if success { Some(chrono::Utc::now().naive_utc()) } else { None };
     
     sqlx::query!(
@@ -359,13 +366,16 @@ async fn update_broadcast_status(
     sent_count: u32,
     failed_count: u32,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let status = "completed";
+    let status = core_logic::BroadcastStatus::Completed.to_string();
     let completed_at = chrono::Utc::now().naive_utc();
     let sent_count_i64 = sent_count as i64;
     let failed_count_i64 = failed_count as i64;
     let pending_count_i64 = 0i64; // Все сообщения обработаны
     
-    sqlx::query!(
+    info!("Executing SQL update for broadcast {}: status={}, sent={}, failed={}, pending={}", 
+          broadcast_id, status, sent_count_i64, failed_count_i64, pending_count_i64);
+    
+    let result = sqlx::query!(
         "UPDATE broadcast_summaries 
          SET status = ?, sent_count = ?, failed_count = ?, pending_count = ?, completed_at = ? 
          WHERE id = ?",
@@ -379,5 +389,7 @@ async fn update_broadcast_status(
     .execute(pool)
     .await?;
 
+    info!("SQL update result: {} rows affected", result.rows_affected());
+    
     Ok(())
 }
