@@ -1,4 +1,4 @@
-use crate::{AllowedUser, Record, Slot, User, CreateSlotRequest, CreateBookingRequest, CreateUserRequest, Booking, BookingInfo};
+use crate::{Slot, User, CreateSlotRequest, CreateBookingRequest, CreateUserRequest, Booking, BookingInfo};
 use sqlx::{migrate::MigrateDatabase, Sqlite, SqlitePool};
 use std::env;
 use chrono::Utc;
@@ -17,7 +17,7 @@ pub async fn init_db() -> Result<SqlitePool, anyhow::Error> {
     .await?;
 
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS users ( id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, telegram_id INTEGER UNIQUE );",
+        "CREATE TABLE IF NOT EXISTS users ( id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, telegram_id INTEGER UNIQUE );",
     )
     .execute(&pool)
     .await?;
@@ -28,11 +28,7 @@ pub async fn init_db() -> Result<SqlitePool, anyhow::Error> {
     .execute(&pool)
     .await?;
 
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS allowed_users ( user_id INTEGER PRIMARY KEY );",
-    )
-    .execute(&pool)
-    .await?;
+    
 
     Ok(pool)
 }
@@ -61,13 +57,8 @@ pub async fn create_or_update_booking(pool: &SqlitePool, user_id: i64, slot_id: 
     Ok(())
 }
 
-pub async fn get_allowed_users(pool: &SqlitePool) -> Result<Vec<AllowedUser>, sqlx::Error> {
-    sqlx::query_as::<_, AllowedUser>("SELECT * FROM allowed_users")
-        .fetch_all(pool)
-        .await
-}
 
-/*
+
 pub async fn create_slot(pool: &SqlitePool, payload: CreateSlotRequest) -> Result<Slot, sqlx::Error> {
     let time = payload.start_time.to_rfc3339();
     let place = payload.title;
@@ -82,20 +73,13 @@ pub async fn create_slot(pool: &SqlitePool, payload: CreateSlotRequest) -> Resul
 
     get_slot(pool, id).await.map(|s| s.unwrap())
 }
-*/
 
 pub async fn create_booking(pool: &SqlitePool, payload: CreateBookingRequest) -> Result<Booking, sqlx::Error> {
-    // For now, we'll find the user by name. In a real application, you'd likely have a more robust way of identifying users.
-    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE name = ?")
-        .bind(&payload.user_name)
-        .fetch_one(pool)
-        .await?;
-
     let slot_id = payload.slot_id.parse::<i64>().unwrap();
 
-    create_or_update_booking(pool, user.id, Some(slot_id)).await?;
+    create_or_update_booking(pool, payload.user_id, Some(slot_id)).await?;
 
-    Ok(Booking { slot_id: payload.slot_id, user_name: payload.user_name })
+    Ok(Booking { slot_id: payload.slot_id, user_id: payload.user_id })
 }
 
 pub async fn get_users(pool: &SqlitePool) -> Result<Vec<User>, sqlx::Error> {
@@ -104,21 +88,18 @@ pub async fn get_users(pool: &SqlitePool) -> Result<Vec<User>, sqlx::Error> {
         .await
 }
 
-/*
 pub async fn create_user(pool: &SqlitePool, payload: CreateUserRequest) -> Result<User, sqlx::Error> {
     let id = sqlx::query!(
-        "INSERT INTO users (name, email, telegram_id) VALUES (?, ?, ?)",
+        "INSERT INTO users (name, telegram_id) VALUES (?, ?)",
         payload.name,
-        payload.email,
         payload.telegram_id
     )
     .execute(pool)
     .await?
     .last_insert_rowid();
 
-    Ok(User { id, name: payload.name, email: payload.email, telegram_id: payload.telegram_id })
+    Ok(User { id, name: payload.name, telegram_id: payload.telegram_id })
 }
-*/
 
 pub async fn get_user_by_telegram_id(pool: &SqlitePool, telegram_id: i64) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as::<_, User>("SELECT * FROM users WHERE telegram_id = ?")

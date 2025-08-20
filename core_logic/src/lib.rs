@@ -26,11 +26,7 @@ pub struct Record {
     pub slot_id: Option<i64>,
 }
 
-// Структура перенесена из telegram_bot/src/db.rs
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize, ToSchema)]
-pub struct AllowedUser {
-    pub user_id: i64,
-}
+
 
 // Новая структура для события из API
 #[derive(Debug, Deserialize, ToSchema)]
@@ -60,7 +56,7 @@ pub struct ApiSlot {
 #[derive(Debug, Deserialize, Serialize, ToSchema)]
 pub struct Booking {
     pub slot_id: String,
-    pub user_name: String,
+    pub user_id: i64,
 }
 
 
@@ -76,7 +72,6 @@ pub struct ApiResponse {
 pub struct User {
     pub id: i64,
     pub name: String,
-    pub email: String,
     pub telegram_id: Option<i64>,
 }
 
@@ -134,14 +129,13 @@ pub struct CreateSlotRequest {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateBookingRequest {
     pub slot_id: String,
-    pub user_name: String,
+    pub user_id: i64,
 }
 
 // Новая структура для запроса на создание пользователя
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateUserRequest {
     pub name: String,
-    pub email: String,
     pub telegram_id: Option<i64>,
 }
 

@@ -4,28 +4,10 @@ use std::sync::Arc;
 use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardButtonKind, InlineKeyboardMarkup};
 use teloxide::utils::command::BotCommands;
-use lapin::{Connection, ConnectionProperties, options::*, types::FieldTable, BasicProperties, Channel};
-use chrono::{Utc, Timelike};
+use chrono::{Utc, Timelike, Datelike, TimeZone};
 use sqlx::SqlitePool;
 use core_logic::CreateUserRequest;
 use anyhow::Context;
-
-#[derive(Debug, Serialize)]
-struct BookingEvent<'a> {
-    event_type: &'a str,
-    user_telegram_id: u64,
-    timestamp: String,
-    payload: BookingPayload<'a>,
-}
-
-#[derive(Debug, Serialize)]
-struct BookingPayload<'a> {
-    old_date: Option<&'a str>,
-    old_time: Option<&'a str>,
-    new_date: &'a str,
-    new_time: &'a str,
-    location: &'a str,
-}
 
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "These commands are supported:")]
@@ -66,17 +48,8 @@ async fn callback_handler(
     q: CallbackQuery,
     bot: Bot,
     pool: Arc<SqlitePool>,
-    channel: Arc<Channel>,
 ) -> ResponseResult<()> {
-    if let Ok(allowed_users) = core_logic::db::get_allowed_users(&pool).await {
-        if !allowed_users.iter().any(|u| u.user_id == q.from.id.0 as i64) {
-            bot.answer_callback_query(q.id.clone())
-                .text("You are not authorized to use this bot.")
-                .show_alert(true)
-                .await?;
-            return Ok(())
-        }
-    }
+    
 
     if let Some(ref data) = q.data {
         if data == "sign_up" {
@@ -84,7 +57,7 @@ async fn callback_handler(
         } else if data.starts_with("book_") {
             handle_slot_selection(&q, bot, data).await?;
         } else if data.starts_with("confirm_") {
-            handle_confirm_booking(&q, bot, data, channel, pool).await?;
+            handle_confirm_booking(&q, bot, data, pool).await?;
         }
     }
 
@@ -150,7 +123,7 @@ async fn handle_slot_selection(q: &CallbackQuery, bot: Bot, data: &str) -> Respo
     Ok(())
 }
 
-async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str, channel: Arc<Channel>, pool: Arc<SqlitePool>) -> ResponseResult<()> {
+async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str, pool: Arc<SqlitePool>) -> ResponseResult<()> {
     bot.answer_callback_query(q.id.clone()).await?;
 
     let parts: Vec<&str> = data.split('_').collect();
@@ -163,7 +136,6 @@ async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str, channel
                         Ok(None) => {
                             let new_user = CreateUserRequest {
                                 name: q.from.first_name.clone(),
-                                email: "".to_string(), // No email from telegram
                                 telegram_id: Some(q.from.id.0 as i64),
                             };
                             match core_logic::db::create_user(&pool, new_user).await {
@@ -186,36 +158,6 @@ async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str, channel
                         return Ok(())
                     }
 
-                    let event = BookingEvent {
-                        event_type: "booking.created",
-                        user_telegram_id: q.from.id.0,
-                        timestamp: Utc::now().to_rfc3339(),
-                        payload: BookingPayload {
-                            old_date: None,
-                            old_time: None,
-                            new_date: "Date",
-                            new_time: &slot.time,
-                            location: &slot.place,
-                        },
-                    };
-                    let payload = match serde_json::to_string(&event) {
-                        Ok(p) => p.as_bytes().to_vec(),
-                        Err(e) => {
-                            tracing::error!("Failed to serialize booking event: {}", e);
-                            return Ok(())
-                        }
-                    };
-
-                    if let Err(e) = channel.basic_publish(
-                        "",
-                        "admin.booking.event",
-                        BasicPublishOptions::default(),
-                        &payload,
-                        BasicProperties::default(),
-                    ).await {
-                        tracing::error!("Failed to publish booking event: {}", e);
-                    };
-
                     bot.edit_message_text(msg.chat().id, msg.id(), text)
                         .reply_markup(InlineKeyboardMarkup::new(vec![vec![]]))
                         .await?;
@@ -230,11 +172,11 @@ async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str, channel
 async fn notification_scheduler(bot: Bot, pool: Arc<SqlitePool>) {
     loop {
         let now = Utc::now();
-        let nine_am_utc = now.date().and_hms(9, 0, 0);
+        let nine_am_utc = Utc.with_ymd_and_hms(now.year(), now.month(), now.day(), 9, 0, 0).unwrap();
         let sleep_duration = if now < nine_am_utc {
             (nine_am_utc - now).to_std()
         } else {
-            (nine_am_utc.succ() - now).to_std()
+            (nine_am_utc + chrono::Duration::days(1) - now).to_std()
         };
 
         if let Ok(duration) = sleep_duration {
@@ -266,20 +208,6 @@ async fn main() -> anyhow::Result<()> {
 
     let pool = Arc::new(core_logic::db::init_db().await.context("Failed to initialize database")?);
 
-    let addr = env::var("AMQP_ADDR").unwrap_or_else(|_| "amqp://guest:guest@localhost:5672/%2f".to_string());
-    let conn = Connection::connect(&addr, ConnectionProperties::default()).await.context("Failed to connect to RabbitMQ")?;
-    tracing::info!("Connected to RabbitMQ");
-    let channel = Arc::new(conn.create_channel().await.context("Failed to create channel")?);
-    
-    let queue_name = "admin.booking.event";
-    channel.queue_declare(
-        queue_name,
-        QueueDeclareOptions::default(),
-        FieldTable::default(),
-    ).await.context("Failed to declare queue")?;
-    tracing::info!("Declared queue 'admin.booking.event'");
-
-
     let bot = Bot::from_env();
 
     let handler = dptree::entry()
@@ -287,7 +215,7 @@ async fn main() -> anyhow::Result<()> {
         .branch(Update::filter_callback_query().endpoint(callback_handler));
 
     let mut dispatcher = Dispatcher::builder(bot.clone(), handler)
-        .dependencies(dptree::deps![pool.clone(), channel])
+        .dependencies(dptree::deps![pool.clone()])
         .enable_ctrlc_handler()
         .build();
 

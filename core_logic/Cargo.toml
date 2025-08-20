@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 tokio = { workspace = true }
 sqlx = { workspace = true }
-lapin = { workspace = true }
+
 redis = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -14,4 +14,5 @@ chrono = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-utoipa = { version = "3.0.0", features = ["chrono"] }
+utoipa = { version = "5.4.0", features = ["chrono"] }
+dotenvy = { workspace = true }
