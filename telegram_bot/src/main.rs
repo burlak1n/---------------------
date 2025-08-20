@@ -73,7 +73,7 @@ async fn handle_sign_up(q: &CallbackQuery, bot: Bot, pool: Arc<SqlitePool>) -> R
 
                 for slot in slots.iter().take(3) {
                     let text = format!("📅 {} | 🏢 {}", 
-                        slot.time, 
+                        slot.time.format("%Y-%m-%d %H:%M"), 
                         slot.place
                     );
                     let callback_data = format!("book_{}", slot.id);
@@ -112,7 +112,7 @@ async fn handle_slot_selection(q: &CallbackQuery, bot: Bot, data: &str, pool: Ar
                 match core_logic::db::get_slot(&pool, slot_id).await {
                     Ok(Some(slot)) => {
                         let text = format!("📋 Выбранный слот:\n\n📅 Время: {}\n🏢 Место: {}\n\nНажмите 'Подтвердить' для завершения записи.", 
-                            slot.time, 
+                            slot.time.format("%Y-%m-%d %H:%M"), 
                             slot.place
                         );
                         let confirm_callback_data = format!("confirm_{}", slot_id);
@@ -174,7 +174,7 @@ async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str, pool: A
                     match core_logic::db::create_or_update_booking(&pool, user.id, Some(slot_id)).await {
                         Ok(_) => {
                             let success_text = format!("🎉 Бронирование подтверждено!\n\n📅 Время: {}\n🏢 Место: {}\n👤 Имя: {}\n\nИспользуйте /reschedule для изменения времени.", 
-                                slot.time, 
+                                slot.time.format("%Y-%m-%d %H:%M"), 
                                 slot.place,
                                 user.name
                             );
@@ -237,7 +237,7 @@ async fn notification_scheduler(bot: Bot, pool: Arc<SqlitePool>) {
 
         for booking in bookings {
             let message = format!("🔔 Напоминание о собеседовании!\n\n📅 Сегодня в {}\n🏢 Место: {}\n\nУдачи на собеседовании! 🍀", 
-                booking.time, 
+                booking.time.format("%H:%M"), 
                 booking.place
             );
             if let Err(e) = bot.send_message(ChatId(booking.telegram_id), message).await {

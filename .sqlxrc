@@ -1,4 +1,4 @@
 {
   "migrations": "./migrations",
-  "database": "./database.db"
+  "database": "/Users/roman/Documents/записьнасобеседования/database.db"
 }

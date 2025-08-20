@@ -10,6 +10,7 @@ pub use db::{
     create_user,
     get_user_by_telegram_id,
     get_todays_bookings,
+    get_all_bookings,
 };
 
 use chrono::{DateTime, Utc};
@@ -34,7 +35,8 @@ pub enum BookingError {
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize, ToSchema)]
 pub struct Slot {
     pub id: i64,
-    pub time: String,
+    #[schema(value_type = String)]
+    pub time: DateTime<Utc>,
     pub place: String,
     pub max_user: u16,
 }
@@ -183,6 +185,7 @@ pub struct UpdateUserRequest {
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize, ToSchema)]
 pub struct BookingInfo {
     pub telegram_id: i64,
-    pub time: String,
+    #[schema(value_type = String)]
+    pub time: DateTime<Utc>,
     pub place: String,
 }

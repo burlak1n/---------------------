@@ -1,7 +1,7 @@
 -- Создание таблицы слотов
 CREATE TABLE IF NOT EXISTS slots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    time TEXT NOT NULL,
+    time DATETIME NOT NULL,
     place TEXT NOT NULL,
     max_user INTEGER NOT NULL CHECK (max_user > 0 AND max_user <= 65535)
 );

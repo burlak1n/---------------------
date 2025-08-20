@@ -6,7 +6,7 @@ use axum::{
     http::StatusCode,
 };
 use std::net::SocketAddr;
-use core_logic::{Slot, Booking, User, CreateSlotRequest, CreateBookingRequest, CreateUserRequest};
+use core_logic::{Slot, Booking, User, CreateSlotRequest, CreateBookingRequest, CreateUserRequest, Record};
 use sqlx::SqlitePool;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -19,9 +19,10 @@ use utoipa_swagger_ui::SwaggerUi;
         create_booking,
         get_users,
         create_user,
+        get_bookings,
     ),
     components(
-        schemas(Slot, Booking, User, CreateSlotRequest, CreateBookingRequest, CreateUserRequest)
+        schemas(Slot, Booking, User, CreateSlotRequest, CreateBookingRequest, CreateUserRequest, Record)
     ),
     tags(
         (name = "interview-booking", description = "Interview Booking API")
@@ -40,7 +41,7 @@ async fn main() {
     let app = Router::new()
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .route("/slots", get(get_slots).post(create_slot))
-        .route("/bookings", post(create_booking))
+        .route("/bookings", post(create_booking).get(get_bookings))
         .route("/users", get(get_users).post(create_user))
         .with_state(pool);
 
@@ -124,6 +125,23 @@ async fn create_booking(State(pool): State<SqlitePool>, Json(payload): Json<Crea
                 }
             }
         }
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/bookings",
+    responses(
+        (status = 200, description = "List all bookings", body = [Record])
+    )
+)]
+async fn get_bookings(State(pool): State<SqlitePool>) -> Result<Json<Vec<Record>>, (StatusCode, String)> {
+    match core_logic::db::get_all_bookings(&pool).await {
+        Ok(bookings) => Ok(Json(bookings)),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Database error: {}", e),
+        )),
     }
 }
 

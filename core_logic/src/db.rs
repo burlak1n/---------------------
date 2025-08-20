@@ -1,4 +1,4 @@
-use crate::{Slot, User, CreateSlotRequest, CreateBookingRequest, CreateUserRequest, Booking, BookingInfo, BookingError};
+use crate::{Slot, User, CreateSlotRequest, CreateBookingRequest, CreateUserRequest, Booking, BookingInfo, BookingError, Record};
 use sqlx::{migrate::MigrateDatabase, Sqlite, SqlitePool};
 use std::env;
 use chrono::Utc;
@@ -82,7 +82,7 @@ pub async fn create_or_update_booking(pool: &SqlitePool, user_id: i64, slot_id: 
 
 
 pub async fn create_slot(pool: &SqlitePool, payload: CreateSlotRequest) -> Result<Slot, sqlx::Error> {
-    let time = payload.start_time.to_rfc3339();
+    let time = payload.start_time;
     let place = payload.place;
     let max_user = payload.max_users;
     let id = sqlx::query!(
@@ -131,11 +131,17 @@ pub async fn get_user_by_telegram_id(pool: &SqlitePool, telegram_id: i64) -> Res
 }
 
 pub async fn get_todays_bookings(pool: &SqlitePool) -> Result<Vec<BookingInfo>, sqlx::Error> {
-    let today = Utc::now().format("%Y-%m-%d").to_string();
+    let today = Utc::now().date_naive();
     sqlx::query_as::<_, BookingInfo>(
-        "SELECT u.telegram_id, s.time, s.place FROM records r JOIN users u ON r.user_id = u.id JOIN slots s ON r.slot_id = s.id WHERE date(s.time) = ?"
+        "SELECT u.telegram_id, s.time, s.place FROM records r JOIN users u ON r.user_id = u.id JOIN slots s ON r.slot_id = s.id WHERE date(s.time) = date(?)"
     )
-    .bind(today)
+    .bind(today.to_string())
     .fetch_all(pool)
     .await
+}
+
+pub async fn get_all_bookings(pool: &SqlitePool) -> Result<Vec<Record>, sqlx::Error> {
+    sqlx::query_as::<_, Record>("SELECT * FROM records")
+        .fetch_all(pool)
+        .await
 }
