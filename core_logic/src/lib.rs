@@ -11,6 +11,11 @@ pub use db::{
     get_user_by_telegram_id,
     get_todays_bookings,
     get_all_bookings,
+    update_slot,
+    update_user,
+    delete_slot,
+    delete_user,
+    delete_booking,
 };
 
 use chrono::{DateTime, Utc};

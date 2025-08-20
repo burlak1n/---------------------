@@ -1,4 +1,4 @@
-use crate::{Slot, User, CreateSlotRequest, CreateBookingRequest, CreateUserRequest, Booking, BookingInfo, BookingError, Record};
+use crate::{Slot, User, CreateSlotRequest, CreateBookingRequest, CreateUserRequest, Booking, BookingInfo, BookingError, Record, UpdateSlotRequest, UpdateUserRequest, UpdateBookingRequest};
 use sqlx::{migrate::MigrateDatabase, Sqlite, SqlitePool};
 use std::env;
 use chrono::Utc;
@@ -144,4 +144,111 @@ pub async fn get_all_bookings(pool: &SqlitePool) -> Result<Vec<Record>, sqlx::Er
     sqlx::query_as::<_, Record>("SELECT * FROM records")
         .fetch_all(pool)
         .await
+}
+
+pub async fn update_slot(pool: &SqlitePool, slot_id: i64, payload: UpdateSlotRequest) -> Result<Slot, sqlx::Error> {
+    let mut query = String::from("UPDATE slots SET ");
+    let mut conditions = Vec::new();
+    let mut params: Vec<Box<dyn sqlx::Encode<'_, Sqlite> + Send + Sync>> = Vec::new();
+
+    if let Some(time) = payload.start_time {
+        conditions.push("time = ?");
+        params.push(Box::new(time));
+    }
+
+    if let Some(place) = payload.place {
+        conditions.push("place = ?");
+        params.push(Box::new(place));
+    }
+
+    if conditions.is_empty() {
+        return get_slot(pool, slot_id).await.map(|s| s.unwrap());
+    }
+
+    query.push_str(&conditions.join(", "));
+    query.push_str(" WHERE id = ?");
+    params.push(Box::new(slot_id));
+
+    sqlx::query(&query)
+        .execute(pool)
+        .await?;
+
+    get_slot(pool, slot_id).await.map(|s| s.unwrap())
+}
+
+pub async fn update_user(pool: &SqlitePool, user_id: i64, payload: UpdateUserRequest) -> Result<User, sqlx::Error> {
+    let mut query = String::from("UPDATE users SET ");
+    let mut conditions = Vec::new();
+    let mut params: Vec<Box<dyn sqlx::Encode<'_, Sqlite> + Send + Sync>> = Vec::new();
+
+    if let Some(name) = payload.name {
+        conditions.push("name = ?");
+        params.push(Box::new(name));
+    }
+
+    if let Some(telegram_id) = payload.telegram_id {
+        conditions.push("telegram_id = ?");
+        params.push(Box::new(telegram_id));
+    }
+
+    if conditions.is_empty() {
+        return sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_one(pool)
+            .await;
+    }
+
+    query.push_str(&conditions.join(", "));
+    query.push_str(" WHERE id = ?");
+    params.push(Box::new(user_id));
+
+    sqlx::query(&query)
+        .execute(pool)
+        .await?;
+
+    sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+}
+
+pub async fn delete_slot(pool: &SqlitePool, slot_id: i64) -> Result<(), sqlx::Error> {
+    // Сначала удаляем все записи, связанные с этим слотом
+    sqlx::query("DELETE FROM records WHERE slot_id = ?")
+        .bind(slot_id)
+        .execute(pool)
+        .await?;
+
+    // Затем удаляем сам слот
+    sqlx::query("DELETE FROM slots WHERE id = ?")
+        .bind(slot_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+pub async fn delete_user(pool: &SqlitePool, user_id: i64) -> Result<(), sqlx::Error> {
+    // Сначала удаляем все записи пользователя
+    sqlx::query("DELETE FROM records WHERE user_id = ?")
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+
+    // Затем удаляем самого пользователя
+    sqlx::query("DELETE FROM users WHERE id = ?")
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+pub async fn delete_booking(pool: &SqlitePool, booking_id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM records WHERE id = ?")
+        .bind(booking_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
 }

@@ -1,15 +1,16 @@
 use axum::{
-    extract::State,
-    routing::{get, post},
+    extract::{State, Path},
+    routing::{get, post, put, delete},
     Router,
     Json,
     http::StatusCode,
 };
 use std::net::SocketAddr;
-use core_logic::{Slot, Booking, User, CreateSlotRequest, CreateBookingRequest, CreateUserRequest, Record};
+use core_logic::{Slot, Booking, User, CreateSlotRequest, CreateBookingRequest, CreateUserRequest, Record, UpdateSlotRequest, UpdateUserRequest};
 use sqlx::SqlitePool;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
+use tower_http::cors::{CorsLayer, Any};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -38,11 +39,21 @@ async fn main() {
     // Инициализируем пул соединений с БД
     let pool = core_logic::db::init_db().await.expect("Failed to initialize database");
 
+    // Настройка CORS
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
     let app = Router::new()
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .route("/slots", get(get_slots).post(create_slot))
+        .route("/slots/:id", put(update_slot).delete(delete_slot))
         .route("/bookings", post(create_booking).get(get_bookings))
+        .route("/bookings/:id", delete(delete_booking))
         .route("/users", get(get_users).post(create_user))
+        .route("/users/:id", put(update_user).delete(delete_user))
+        .layer(cors)
         .with_state(pool);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
@@ -173,6 +184,110 @@ async fn get_users(State(pool): State<SqlitePool>) -> Result<Json<Vec<User>>, (S
 async fn create_user(State(pool): State<SqlitePool>, Json(payload): Json<CreateUserRequest>) -> Result<Json<User>, (StatusCode, String)> {
     match core_logic::db::create_user(&pool, payload).await {
         Ok(user) => Ok(Json(user)),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Database error: {}", e),
+        )),
+    }
+}
+
+#[utoipa::path(
+    put,
+    path = "/slots/{id}",
+    request_body = UpdateSlotRequest,
+    responses(
+        (status = 200, description = "Slot updated successfully", body = Slot)
+    )
+)]
+async fn update_slot(
+    State(pool): State<SqlitePool>, 
+    Path(slot_id): Path<i64>, 
+    Json(payload): Json<UpdateSlotRequest>
+) -> Result<Json<Slot>, (StatusCode, String)> {
+    match core_logic::db::update_slot(&pool, slot_id, payload).await {
+        Ok(slot) => Ok(Json(slot)),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Database error: {}", e),
+        )),
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/slots/{id}",
+    responses(
+        (status = 204, description = "Slot deleted successfully")
+    )
+)]
+async fn delete_slot(
+    State(pool): State<SqlitePool>, 
+    Path(slot_id): Path<i64>
+) -> Result<StatusCode, (StatusCode, String)> {
+    match core_logic::db::delete_slot(&pool, slot_id).await {
+        Ok(_) => Ok(StatusCode::NO_CONTENT),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Database error: {}", e),
+        )),
+    }
+}
+
+#[utoipa::path(
+    put,
+    path = "/users/{id}",
+    request_body = UpdateUserRequest,
+    responses(
+        (status = 200, description = "User updated successfully", body = User)
+    )
+)]
+async fn update_user(
+    State(pool): State<SqlitePool>, 
+    Path(user_id): Path<i64>, 
+    Json(payload): Json<UpdateUserRequest>
+) -> Result<Json<User>, (StatusCode, String)> {
+    match core_logic::db::update_user(&pool, user_id, payload).await {
+        Ok(user) => Ok(Json(user)),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Database error: {}", e),
+        )),
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/users/{id}",
+    responses(
+        (status = 204, description = "User deleted successfully")
+    )
+)]
+async fn delete_user(
+    State(pool): State<SqlitePool>, 
+    Path(user_id): Path<i64>
+) -> Result<StatusCode, (StatusCode, String)> {
+    match core_logic::db::delete_user(&pool, user_id).await {
+        Ok(_) => Ok(StatusCode::NO_CONTENT),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Database error: {}", e),
+        )),
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/bookings/{id}",
+    responses(
+        (status = 204, description = "Booking deleted successfully")
+    )
+)]
+async fn delete_booking(
+    State(pool): State<SqlitePool>, 
+    Path(booking_id): Path<i64>
+) -> Result<StatusCode, (StatusCode, String)> {
+    match core_logic::db::delete_booking(&pool, booking_id).await {
+        Ok(_) => Ok(StatusCode::NO_CONTENT),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Database error: {}", e),

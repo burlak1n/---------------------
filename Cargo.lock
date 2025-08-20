@@ -66,6 +66,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tokio",
+ "tower-http",
  "tracing",
  "utoipa",
  "utoipa-swagger-ui",

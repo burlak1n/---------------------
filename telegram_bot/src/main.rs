@@ -48,7 +48,7 @@ impl UserMessage {
             UserMessage::SlotSelected { time, place } => format!("📋 Выбранный слот:\n\n📅 Время: {}\n🏢 Место: {}\n\nНажмите 'Подтвердить' для завершения записи.", time, place),
             UserMessage::SlotNotFound => "❌ Слот не найден. Попробуйте выбрать другой слот.".to_string(),
             UserMessage::SlotError => "❌ Ошибка при получении информации о слоте. Попробуйте позже.".to_string(),
-            UserMessage::BookingConfirmed { time, place, name } => format!("🎉 Бронирование подтверждено!\n\n📅 Время: {}\n🏢 Место: {}\n👤 Имя: {}\n\nИспользуйте /reschedule для изменения времени.", time, place, name),
+            UserMessage::BookingConfirmed { time, place, name: _ } => format!("🎉 Бронирование подтверждено!\n\n📅 Время: {}\n🏢 Место: {}\n\nИспользуйте /reschedule для изменения времени.", time, place),
             UserMessage::SlotFull { max_users, current_count } => format!("❌ Слот переполнен!\n\nМаксимальное количество пользователей: {}\nТекущее количество: {}\n\nПопробуйте выбрать другой слот или обратитесь к администратору.", max_users, current_count),
             UserMessage::SlotNotFoundError => "❌ Слот не найден. Возможно, он был удален. Попробуйте выбрать другой слот.".to_string(),
             UserMessage::UserNotFound => "❌ Пользователь не найден. Попробуйте начать заново с команды /start.".to_string(),
@@ -222,8 +222,7 @@ async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str, pool: A
                         Ok(_) => {
                             let time = slot.time.format("%Y-%m-%d %H:%M").to_string();
                             let place = slot.place.clone();
-                            let name = user.name.clone();
-                            let message = UserMessage::BookingConfirmed { time, place, name };
+                            let message = UserMessage::BookingConfirmed { time, place, name: String::new() };
                             bot.edit_message_text(msg.chat().id, msg.id(), message.to_string())
                                 .parse_mode(ParseMode::Html)
                                 .reply_markup(InlineKeyboardMarkup::new(vec![vec![]]))
