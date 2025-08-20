@@ -96,10 +96,34 @@ async fn create_slot(State(pool): State<SqlitePool>, Json(payload): Json<CreateS
 async fn create_booking(State(pool): State<SqlitePool>, Json(payload): Json<CreateBookingRequest>) -> Result<Json<Booking>, (StatusCode, String)> {
     match core_logic::db::create_booking(&pool, payload).await {
         Ok(booking) => Ok(Json(booking)),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Database error: {}", e),
-        )),
+        Err(e) => {
+            match e {
+                core_logic::BookingError::SlotFull { max_users, current_count } => {
+                    Err((
+                        StatusCode::CONFLICT,
+                        format!("Слот переполнен: максимальное количество пользователей {}, текущее количество {}", max_users, current_count),
+                    ))
+                }
+                core_logic::BookingError::SlotNotFound => {
+                    Err((
+                        StatusCode::NOT_FOUND,
+                        "Слот не найден".to_string(),
+                    ))
+                }
+                core_logic::BookingError::UserNotFound => {
+                    Err((
+                        StatusCode::NOT_FOUND,
+                        "Пользователь не найден".to_string(),
+                    ))
+                }
+                core_logic::BookingError::Database(db_error) => {
+                    Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Ошибка базы данных: {}", db_error),
+                    ))
+                }
+            }
+        }
     }
 }
 

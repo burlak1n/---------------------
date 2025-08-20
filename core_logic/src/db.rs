@@ -1,4 +1,4 @@
-use crate::{Slot, User, CreateSlotRequest, CreateBookingRequest, CreateUserRequest, Booking, BookingInfo};
+use crate::{Slot, User, CreateSlotRequest, CreateBookingRequest, CreateUserRequest, Booking, BookingInfo, BookingError};
 use sqlx::{migrate::MigrateDatabase, Sqlite, SqlitePool};
 use std::env;
 use chrono::Utc;
@@ -34,7 +34,7 @@ pub async fn get_slot(pool: &SqlitePool, slot_id: i64) -> Result<Option<Slot>, s
         .await
 }
 
-pub async fn create_or_update_booking(pool: &SqlitePool, user_id: i64, slot_id: Option<i64>) -> Result<(), sqlx::Error> {
+pub async fn create_or_update_booking(pool: &SqlitePool, user_id: i64, slot_id: Option<i64>) -> Result<(), BookingError> {
     // Сначала удаляем существующую запись пользователя
     sqlx::query("DELETE FROM records WHERE user_id = ?")
         .bind(user_id)
@@ -54,7 +54,25 @@ pub async fn create_or_update_booking(pool: &SqlitePool, user_id: i64, slot_id: 
         .await?;
         
         if result.rows_affected() == 0 {
-            return Err(sqlx::Error::RowNotFound);
+            // Получаем детали для информативной ошибки
+            let current_count: i64 = sqlx::query_scalar!(
+                "SELECT COUNT(*) FROM records WHERE slot_id = ?",
+                slot_id
+            )
+            .fetch_one(pool)
+            .await?;
+            
+            let max_users: i64 = sqlx::query_scalar!(
+                "SELECT max_user FROM slots WHERE id = ?",
+                slot_id
+            )
+            .fetch_one(pool)
+            .await?;
+            
+            return Err(BookingError::SlotFull { 
+                max_users: max_users as u16, 
+                current_count: current_count as u16 
+            });
         }
     }
     

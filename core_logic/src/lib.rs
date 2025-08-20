@@ -4,6 +4,19 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use utoipa::ToSchema;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum BookingError {
+    #[error("Слот переполнен: максимальное количество пользователей {max_users}, текущее количество {current_count}")]
+    SlotFull { max_users: u16, current_count: u16 },
+    #[error("Слот не найден")]
+    SlotNotFound,
+    #[error("Пользователь не найден")]
+    UserNotFound,
+    #[error("Ошибка базы данных: {0}")]
+    Database(#[from] sqlx::Error),
+}
 
 // Единая структура для слота, объединяющая поля из обоих источников.
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize, ToSchema)]
