@@ -4,13 +4,14 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1.47.1", features = ["full"] }
-sqlx = { version = "0.8.6", features = [ "runtime-tokio-rustls", "sqlite", "macros", "chrono" ] }
-lapin = "3.2.1"
-redis = { version = "0.32.5", features = ["aio", "tokio-comp"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-chrono = { version = "0.4", features = ["serde"] }
-anyhow = "1.0"
-thiserror = "2.0"
-tracing = "0.1"
+tokio = { workspace = true }
+sqlx = { workspace = true }
+lapin = { workspace = true }
+redis = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+utoipa = { version = "3.0.0", features = ["chrono"] }

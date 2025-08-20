@@ -1,13 +1,14 @@
 use serde::Serialize;
 use std::env;
 use std::sync::Arc;
+use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardButtonKind, InlineKeyboardMarkup};
-use teloxide::{prelude::*, utils::command::BotCommands};
-use lapin::{Connection, ConnectionProperties, Result as LapinResult, options::*, types::FieldTable, BasicProperties, Channel};
-use chrono::Utc;
+use teloxide::utils::command::BotCommands;
+use lapin::{Connection, ConnectionProperties, options::*, types::FieldTable, BasicProperties, Channel};
+use chrono::{Utc, Timelike};
 use sqlx::SqlitePool;
-
-mod db;
+use core_logic::CreateUserRequest;
+use anyhow::Context;
 
 #[derive(Debug, Serialize)]
 struct BookingEvent<'a> {
@@ -67,13 +68,14 @@ async fn callback_handler(
     pool: Arc<SqlitePool>,
     channel: Arc<Channel>,
 ) -> ResponseResult<()> {
-    let allowed_users = db::get_allowed_users(&pool).await.unwrap_or_default();
-    if !allowed_users.iter().any(|u| u.user_id == q.from.id.0 as i64) {
-        bot.answer_callback_query(q.id.clone())
-            .text("You are not authorized to use this bot.")
-            .show_alert(true)
-            .await?;
-        return Ok(())
+    if let Ok(allowed_users) = core_logic::db::get_allowed_users(&pool).await {
+        if !allowed_users.iter().any(|u| u.user_id == q.from.id.0 as i64) {
+            bot.answer_callback_query(q.id.clone())
+                .text("You are not authorized to use this bot.")
+                .show_alert(true)
+                .await?;
+            return Ok(())
+        }
     }
 
     if let Some(ref data) = q.data {
@@ -93,25 +95,32 @@ async fn handle_sign_up(q: &CallbackQuery, bot: Bot, pool: Arc<SqlitePool>) -> R
     bot.answer_callback_query(q.id.clone()).await?;
 
     if let Some(msg) = &q.message {
-        let slots = db::get_available_slots(&pool).await.unwrap_or_default();
-        let mut keyboard_buttons = vec![];
+        match core_logic::db::get_available_slots(&pool).await {
+            Ok(slots) => {
+                let mut keyboard_buttons = vec![];
 
-        for slot in slots.iter().take(3) {
-            let text = format!("{} at {} ({})", "Date", slot.time, slot.place);
-            let callback_data = format!("book_{}", slot.id);
-            keyboard_buttons.push(vec![InlineKeyboardButton::new(
-                text,
-                InlineKeyboardButtonKind::CallbackData(callback_data),
-            )]);
-        }
+                for slot in slots.iter().take(3) {
+                    let text = format!("{} at {} ({})", "Date", slot.time, slot.place);
+                    let callback_data = format!("book_{}", slot.id);
+                    keyboard_buttons.push(vec![InlineKeyboardButton::new(
+                        text,
+                        InlineKeyboardButtonKind::CallbackData(callback_data),
+                    )]);
+                }
 
-        if !keyboard_buttons.is_empty() {
-            let keyboard = InlineKeyboardMarkup::new(keyboard_buttons);
-            bot.edit_message_text(msg.chat().id, msg.id(), "Please choose a slot:")
-                .reply_markup(keyboard)
-                .await?;
-        } else {
-            bot.edit_message_text(msg.chat().id, msg.id(), "Sorry, no available slots at the moment.").await?;
+                if !keyboard_buttons.is_empty() {
+                    let keyboard = InlineKeyboardMarkup::new(keyboard_buttons);
+                    bot.edit_message_text(msg.chat().id, msg.id(), "Please choose a slot:")
+                        .reply_markup(keyboard)
+                        .await?;
+                } else {
+                    bot.edit_message_text(msg.chat().id, msg.id(), "Sorry, no available slots at the moment.").await?;
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to get available slots: {}", e);
+                bot.edit_message_text(msg.chat().id, msg.id(), "Sorry, something went wrong.").await?;
+            }
         }
     }
     Ok(())
@@ -146,47 +155,71 @@ async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str, channel
 
     let parts: Vec<&str> = data.split('_').collect();
     if parts.len() == 2 {
-        let slot_id = parts[1].parse::<i64>().unwrap_or_default();
+        if let Ok(slot_id) = parts[1].parse::<i64>() {
+            if let Ok(Some(slot)) = core_logic::db::get_slot(&pool, slot_id).await {
+                if let Some(msg) = &q.message {
+                    let user = match core_logic::db::get_user_by_telegram_id(&pool, q.from.id.0 as i64).await {
+                        Ok(Some(user)) => user,
+                        Ok(None) => {
+                            let new_user = CreateUserRequest {
+                                name: q.from.first_name.clone(),
+                                email: "".to_string(), // No email from telegram
+                                telegram_id: Some(q.from.id.0 as i64),
+                            };
+                            match core_logic::db::create_user(&pool, new_user).await {
+                                Ok(user) => user,
+                                Err(e) => {
+                                    tracing::error!("Failed to create user: {}", e);
+                                    return Ok(())
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to get user by telegram id: {}", e);
+                            return Ok(())
+                        }
+                    };
 
-        if let Some(slot) = db::get_slot(&pool, slot_id).await.unwrap_or_default() {
-            if let Some(msg) = &q.message {
-                let text = format!("Success! Your booking is confirmed for {} at {}.\nUse /reschedule to change your slot.", "Date", slot.time);
-                db::create_or_update_booking(&pool, q.from.id.0 as i64, Some(slot_id)).await.unwrap();
-
-                let event = BookingEvent {
-                    event_type: "booking.created",
-                    user_telegram_id: q.from.id.0,
-                    timestamp: Utc::now().to_rfc3339(),
-                    payload: BookingPayload {
-                        old_date: None,
-                        old_time: None,
-                        new_date: "Date",
-                        new_time: &slot.time,
-                        location: &slot.place,
-                    },
-                };
-                let payload = match serde_json::to_string(&event) {
-                    Ok(p) => p.as_bytes().to_vec(),
-                    Err(e) => {
-                        tracing::error!("Failed to serialize booking event: {}", e);
+                    let text = format!("Success! Your booking is confirmed for {} at {}.\nUse /reschedule to change your slot.", "Date", slot.time);
+                    if let Err(e) = core_logic::db::create_or_update_booking(&pool, user.id, Some(slot_id)).await {
+                        tracing::error!("Failed to create or update booking: {}", e);
                         return Ok(())
                     }
-                };
 
-                match channel.basic_publish(
-                    "",
-                    "admin.booking.event",
-                    BasicPublishOptions::default(),
-                    &payload,
-                    BasicProperties::default()
-                ).await {
-                    Ok(_) => tracing::info!("Published booking event for user {}", q.from.id),
-                    Err(e) => tracing::error!("Failed to publish booking event: {}", e),
-                };
+                    let event = BookingEvent {
+                        event_type: "booking.created",
+                        user_telegram_id: q.from.id.0,
+                        timestamp: Utc::now().to_rfc3339(),
+                        payload: BookingPayload {
+                            old_date: None,
+                            old_time: None,
+                            new_date: "Date",
+                            new_time: &slot.time,
+                            location: &slot.place,
+                        },
+                    };
+                    let payload = match serde_json::to_string(&event) {
+                        Ok(p) => p.as_bytes().to_vec(),
+                        Err(e) => {
+                            tracing::error!("Failed to serialize booking event: {}", e);
+                            return Ok(())
+                        }
+                    };
 
-                bot.edit_message_text(msg.chat().id, msg.id(), text)
-                    .reply_markup(InlineKeyboardMarkup::new(vec![vec![]]))
-                    .await?;
+                    if let Err(e) = channel.basic_publish(
+                        "",
+                        "admin.booking.event",
+                        BasicPublishOptions::default(),
+                        &payload,
+                        BasicProperties::default(),
+                    ).await {
+                        tracing::error!("Failed to publish booking event: {}", e);
+                    };
+
+                    bot.edit_message_text(msg.chat().id, msg.id(), text)
+                        .reply_markup(InlineKeyboardMarkup::new(vec![vec![]]))
+                        .await?;
+                }
             }
         }
     }
@@ -194,37 +227,56 @@ async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str, channel
     Ok(())
 }
 
-async fn notification_scheduler(_bot: Bot) {
-    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+async fn notification_scheduler(bot: Bot, pool: Arc<SqlitePool>) {
     loop {
-        interval.tick().await;
-        // TODO: Implement notification logic
-        // 1. Get the current time in MSK timezone (requires a crate like chrono-tz).
-        // 2. Check if the time is 11:00 AM.
-        // 3. Access persistent storage of bookings (e.g., Redis or a database).
-        // 4. Iterate through today's bookings and send reminders.
+        let now = Utc::now();
+        let nine_am_utc = now.date().and_hms(9, 0, 0);
+        let sleep_duration = if now < nine_am_utc {
+            (nine_am_utc - now).to_std()
+        } else {
+            (nine_am_utc.succ() - now).to_std()
+        };
+
+        if let Ok(duration) = sleep_duration {
+            tokio::time::sleep(duration).await;
+        }
+
+        let bookings = match core_logic::db::get_todays_bookings(&pool).await {
+            Ok(bookings) => bookings,
+            Err(e) => {
+                tracing::error!("Failed to get today's bookings: {}", e);
+                continue;
+            }
+        };
+
+        for booking in bookings {
+            let message = format!("Reminder: You have an interview today at {} at {}.", booking.time, booking.place);
+            if let Err(e) = bot.send_message(ChatId(booking.telegram_id), message).await {
+                tracing::error!("Failed to send reminder to user {}: {}", booking.telegram_id, e);
+            }
+        }
     }
 }
 
 #[tokio::main]
-async fn main() -> LapinResult<()> {
-    dotenvy::dotenv().expect(".env file not found");
+async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().context(".env file not found")?;
     tracing_subscriber::fmt::init();
     tracing::info!("Starting interview booking bot...");
 
-    let pool = db::init_db().await.expect("Failed to initialize database");
+    let pool = Arc::new(core_logic::db::init_db().await.context("Failed to initialize database")?);
 
-    let addr = "amqp://guest:guest@localhost:5672/%2f";
-    let conn = Connection::connect(addr, ConnectionProperties::default()).await?;
+    let addr = env::var("AMQP_ADDR").unwrap_or_else(|_| "amqp://guest:guest@localhost:5672/%2f".to_string());
+    let conn = Connection::connect(&addr, ConnectionProperties::default()).await.context("Failed to connect to RabbitMQ")?;
     tracing::info!("Connected to RabbitMQ");
-    let channel = conn.create_channel().await?;
+    let channel = Arc::new(conn.create_channel().await.context("Failed to create channel")?);
     
     let queue_name = "admin.booking.event";
     channel.queue_declare(
         queue_name,
         QueueDeclareOptions::default(),
         FieldTable::default(),
-    ).await?;
+    ).await.context("Failed to declare queue")?;
     tracing::info!("Declared queue 'admin.booking.event'");
 
 
@@ -235,13 +287,13 @@ async fn main() -> LapinResult<()> {
         .branch(Update::filter_callback_query().endpoint(callback_handler));
 
     let mut dispatcher = Dispatcher::builder(bot.clone(), handler)
-        .dependencies(dptree::deps![Arc::new(pool), Arc::new(channel)])
+        .dependencies(dptree::deps![pool.clone(), channel])
         .enable_ctrlc_handler()
         .build();
 
     tokio::select! {
         _ = dispatcher.dispatch() => {},
-        _ = notification_scheduler(bot) => {},
+        _ = notification_scheduler(bot, pool) => {},
     }
 
     Ok(())
