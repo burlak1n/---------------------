@@ -1,25 +1,13 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::env;
-use std::fs;
 use std::sync::Arc;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardButtonKind, InlineKeyboardMarkup};
 use teloxide::{prelude::*, utils::command::BotCommands};
 use lapin::{Connection, ConnectionProperties, Result as LapinResult, options::*, types::FieldTable, BasicProperties, Channel};
 use chrono::Utc;
+use sqlx::SqlitePool;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct Slot {
-    time: String,
-    location: String,
-    max_users: u32,
-    booked_users: Vec<u64>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct SlotDate {
-    date: String,
-    slots: Vec<Slot>,
-}
+mod db;
 
 #[derive(Debug, Serialize)]
 struct BookingEvent<'a> {
@@ -36,18 +24,6 @@ struct BookingPayload<'a> {
     new_date: &'a str,
     new_time: &'a str,
     location: &'a str,
-}
-
-fn load_available_slots() -> Result<Vec<SlotDate>, Box<dyn std::error::Error>> {
-    let data = fs::read_to_string("available_slots.json")?;
-    let slots: Vec<SlotDate> = serde_json::from_str(&data)?;
-    Ok(slots)
-}
-
-fn load_allowed_users() -> Result<Vec<u64>, Box<dyn std::error::Error>> {
-    let data = fs::read_to_string("allowed_users.json")?;
-    let users: Vec<u64> = serde_json::from_str(&data)?;
-    Ok(users)
 }
 
 #[derive(BotCommands, Clone)]
@@ -88,11 +64,11 @@ async fn command_handler(bot: Bot, msg: Message, cmd: Command) -> ResponseResult
 async fn callback_handler(
     q: CallbackQuery,
     bot: Bot,
-    slots: Arc<Vec<SlotDate>>,
-    allowed_users: Arc<Vec<u64>>,
+    pool: Arc<SqlitePool>,
     channel: Arc<Channel>,
 ) -> ResponseResult<()> {
-    if !allowed_users.contains(&q.from.id.0) {
+    let allowed_users = db::get_allowed_users(&pool).await.unwrap_or_default();
+    if !allowed_users.iter().any(|u| u.user_id == q.from.id.0 as i64) {
         bot.answer_callback_query(q.id.clone())
             .text("You are not authorized to use this bot.")
             .show_alert(true)
@@ -102,41 +78,31 @@ async fn callback_handler(
 
     if let Some(ref data) = q.data {
         if data == "sign_up" {
-            handle_sign_up(&q, bot, slots).await?;
+            handle_sign_up(&q, bot, pool).await?;
         } else if data.starts_with("book_") {
             handle_slot_selection(&q, bot, data).await?;
         } else if data.starts_with("confirm_") {
-            handle_confirm_booking(&q, bot, data, channel, slots).await?;
+            handle_confirm_booking(&q, bot, data, channel, pool).await?;
         }
     }
 
     Ok(())
 }
 
-async fn handle_sign_up(q: &CallbackQuery, bot: Bot, slots: Arc<Vec<SlotDate>>) -> ResponseResult<()> {
+async fn handle_sign_up(q: &CallbackQuery, bot: Bot, pool: Arc<SqlitePool>) -> ResponseResult<()> {
     bot.answer_callback_query(q.id.clone()).await?;
 
     if let Some(msg) = &q.message {
+        let slots = db::get_available_slots(&pool).await.unwrap_or_default();
         let mut keyboard_buttons = vec![];
-        let mut count = 0;
 
-        for date_slots in slots.iter() {
-            for slot in &date_slots.slots {
-                if count < 3 {
-                    let text = format!("{} at {} ({})", date_slots.date, slot.time, slot.location);
-                    let callback_data = format!("book_{}_{}", date_slots.date, slot.time);
-                    keyboard_buttons.push(vec![InlineKeyboardButton::new(
-                        text,
-                        InlineKeyboardButtonKind::CallbackData(callback_data),
-                    )]);
-                    count += 1;
-                } else {
-                    break;
-                }
-            }
-            if count >= 3 {
-                break;
-            }
+        for slot in slots.iter().take(3) {
+            let text = format!("{} at {} ({})", "Date", slot.time, slot.place);
+            let callback_data = format!("book_{}", slot.id);
+            keyboard_buttons.push(vec![InlineKeyboardButton::new(
+                text,
+                InlineKeyboardButtonKind::CallbackData(callback_data),
+            )]);
         }
 
         if !keyboard_buttons.is_empty() {
@@ -155,13 +121,12 @@ async fn handle_slot_selection(q: &CallbackQuery, bot: Bot, data: &str) -> Respo
     bot.answer_callback_query(q.id.clone()).await?;
 
     let parts: Vec<&str> = data.split('_').collect();
-    if parts.len() == 3 {
-        let date = parts[1];
-        let time = parts[2];
+    if parts.len() == 2 {
+        let slot_id = parts[1];
 
         if let Some(msg) = &q.message {
-            let text = format!("You have selected the slot on {} at {}. Please confirm.", date, time);
-            let confirm_callback_data = format!("confirm_{}_{}", date, time);
+            let text = format!("You have selected slot {}. Please confirm.", slot_id);
+            let confirm_callback_data = format!("confirm_{}", slot_id);
             let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::new(
                 "Confirm",
                 InlineKeyboardButtonKind::CallbackData(confirm_callback_data),
@@ -176,57 +141,53 @@ async fn handle_slot_selection(q: &CallbackQuery, bot: Bot, data: &str) -> Respo
     Ok(())
 }
 
-async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str, channel: Arc<Channel>, slots: Arc<Vec<SlotDate>>) -> ResponseResult<()> {
+async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str, channel: Arc<Channel>, pool: Arc<SqlitePool>) -> ResponseResult<()> {
     bot.answer_callback_query(q.id.clone()).await?;
 
     let parts: Vec<&str> = data.split('_').collect();
-    if parts.len() == 3 {
-        let date = parts[1];
-        let time = parts[2];
+    if parts.len() == 2 {
+        let slot_id = parts[1].parse::<i64>().unwrap_or_default();
 
-        let location = slots.iter()
-            .find(|d| d.date == date)
-            .and_then(|d| d.slots.iter().find(|s| s.time == time))
-            .map(|s| s.location.as_str())
-            .unwrap_or("");
+        if let Some(slot) = db::get_slot(&pool, slot_id).await.unwrap_or_default() {
+            if let Some(msg) = &q.message {
+                let text = format!("Success! Your booking is confirmed for {} at {}.\nUse /reschedule to change your slot.", "Date", slot.time);
+                db::create_or_update_booking(&pool, q.from.id.0 as i64, Some(slot_id)).await.unwrap();
 
-        if let Some(msg) = &q.message {
-            let text = format!("Success! Your booking is confirmed for {} at {}.\nUse /reschedule to change your slot.", date, time);
-            
-            let event = BookingEvent {
-                event_type: "booking.created",
-                user_telegram_id: q.from.id.0,
-                timestamp: Utc::now().to_rfc3339(),
-                payload: BookingPayload {
-                    old_date: None,
-                    old_time: None,
-                    new_date: date,
-                    new_time: time,
-                    location,
-                },
-            };
-            let payload = match serde_json::to_string(&event) {
-                Ok(p) => p.as_bytes().to_vec(),
-                Err(e) => {
-                    tracing::error!("Failed to serialize booking event: {}", e);
-                    return Ok(())
-                }
-            };
+                let event = BookingEvent {
+                    event_type: "booking.created",
+                    user_telegram_id: q.from.id.0,
+                    timestamp: Utc::now().to_rfc3339(),
+                    payload: BookingPayload {
+                        old_date: None,
+                        old_time: None,
+                        new_date: "Date",
+                        new_time: &slot.time,
+                        location: &slot.place,
+                    },
+                };
+                let payload = match serde_json::to_string(&event) {
+                    Ok(p) => p.as_bytes().to_vec(),
+                    Err(e) => {
+                        tracing::error!("Failed to serialize booking event: {}", e);
+                        return Ok(())
+                    }
+                };
 
-            match channel.basic_publish(
-                "",
-                "admin.booking.event",
-                BasicPublishOptions::default(),
-                &payload,
-                BasicProperties::default()
-            ).await {
-                Ok(_) => tracing::info!("Published booking event for user {}", q.from.id),
-                Err(e) => tracing::error!("Failed to publish booking event: {}", e),
-            };
+                match channel.basic_publish(
+                    "",
+                    "admin.booking.event",
+                    BasicPublishOptions::default(),
+                    &payload,
+                    BasicProperties::default()
+                ).await {
+                    Ok(_) => tracing::info!("Published booking event for user {}", q.from.id),
+                    Err(e) => tracing::error!("Failed to publish booking event: {}", e),
+                };
 
-            bot.edit_message_text(msg.chat().id, msg.id(), text)
-                .reply_markup(InlineKeyboardMarkup::new(vec![vec![]]))
-                .await?;
+                bot.edit_message_text(msg.chat().id, msg.id(), text)
+                    .reply_markup(InlineKeyboardMarkup::new(vec![vec![]]))
+                    .await?;
+            }
         }
     }
 
@@ -251,11 +212,7 @@ async fn main() -> LapinResult<()> {
     tracing_subscriber::fmt::init();
     tracing::info!("Starting interview booking bot...");
 
-    let allowed_users = Arc::new(load_allowed_users().expect("Could not load allowed users"));
-    let available_slots = Arc::new(load_available_slots().expect("Could not load available slots"));
-
-    tracing::info!("Loaded {} allowed users", allowed_users.len());
-    tracing::info!("Loaded {} dates with slots", available_slots.len());
+    let pool = db::init_db().await.expect("Failed to initialize database");
 
     let addr = "amqp://guest:guest@localhost:5672/%2f";
     let conn = Connection::connect(addr, ConnectionProperties::default()).await?;
@@ -278,7 +235,7 @@ async fn main() -> LapinResult<()> {
         .branch(Update::filter_callback_query().endpoint(callback_handler));
 
     let mut dispatcher = Dispatcher::builder(bot.clone(), handler)
-        .dependencies(dptree::deps![allowed_users, available_slots, Arc::new(channel)])
+        .dependencies(dptree::deps![Arc::new(pool), Arc::new(channel)])
         .enable_ctrlc_handler()
         .build();
 
