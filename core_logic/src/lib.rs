@@ -9,13 +9,9 @@ use utoipa::ToSchema;
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize, ToSchema)]
 pub struct Slot {
     pub id: i64,
-    // Из старой структуры
     pub time: String,
     pub place: String,
     pub max_user: i64,
-    // Из новой структуры
-    #[sqlx(default)] // Позволяет полю отсутствовать в запросе, если оно не нужно
-    pub start_time: Option<DateTime<Utc>>,
 }
 
 // Структура перенесена из telegram_bot/src/db.rs
@@ -24,6 +20,7 @@ pub struct Record {
     pub id: i64,
     pub user_id: i64,
     pub slot_id: Option<i64>,
+    pub created_at: Option<DateTime<Utc>>,
 }
 
 
@@ -47,7 +44,6 @@ pub struct EventTime {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ApiSlot {
     pub start_time: DateTime<Utc>,
-    pub end_time: DateTime<Utc>,
     pub title: String,
 }
 
@@ -121,7 +117,6 @@ pub struct ErrorResponse {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateSlotRequest {
     pub start_time: DateTime<Utc>,
-    pub end_time: DateTime<Utc>,
     pub title: String,
 }
 
@@ -143,7 +138,6 @@ pub struct CreateUserRequest {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateSlotRequest {
     pub start_time: Option<DateTime<Utc>>,
-    pub end_time: Option<DateTime<Utc>>,
     pub title: Option<String>,
 }
 

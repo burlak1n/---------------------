@@ -10,25 +10,9 @@ pub async fn init_db() -> Result<SqlitePool, anyhow::Error> {
     }
 
     let pool = SqlitePool::connect(&db_url).await?;
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS slots ( id INTEGER PRIMARY KEY AUTOINCREMENT, time TEXT NOT NULL, place TEXT NOT NULL, max_user INTEGER NOT NULL );",
-    )
-    .execute(&pool)
-    .await?;
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS users ( id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, telegram_id INTEGER UNIQUE );",
-    )
-    .execute(&pool)
-    .await?;
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS records ( id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, slot_id INTEGER, FOREIGN KEY (user_id) REFERENCES users(id), FOREIGN KEY (slot_id) REFERENCES slots(id) );",
-    )
-    .execute(&pool)
-    .await?;
-
     
+    // Применяем миграции
+    sqlx::migrate!("../migrations").run(&pool).await?;
 
     Ok(pool)
 }
@@ -49,11 +33,21 @@ pub async fn get_slot(pool: &SqlitePool, slot_id: i64) -> Result<Option<Slot>, s
 }
 
 pub async fn create_or_update_booking(pool: &SqlitePool, user_id: i64, slot_id: Option<i64>) -> Result<(), sqlx::Error> {
-    sqlx::query("INSERT INTO records (user_id, slot_id) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET slot_id = excluded.slot_id")
+    // Сначала удаляем существующую запись пользователя
+    sqlx::query("DELETE FROM records WHERE user_id = ?")
         .bind(user_id)
-        .bind(slot_id)
         .execute(pool)
         .await?;
+    
+    // Затем создаем новую запись
+    if let Some(slot_id) = slot_id {
+        sqlx::query("INSERT INTO records (user_id, slot_id) VALUES (?, ?)")
+            .bind(user_id)
+            .bind(slot_id)
+            .execute(pool)
+            .await?;
+    }
+    
     Ok(())
 }
 
