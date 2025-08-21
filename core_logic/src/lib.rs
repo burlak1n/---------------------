@@ -239,6 +239,7 @@ pub enum BroadcastEvent {
         broadcast_id: String,
         message: String,
         target_users: Vec<User>,
+        message_type: Option<BroadcastMessageType>,
         created_at: DateTime<Utc>,
     },
     BroadcastStarted {

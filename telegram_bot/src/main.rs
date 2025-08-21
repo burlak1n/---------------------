@@ -105,21 +105,26 @@ async fn handle_sign_up(q: &CallbackQuery, bot: Bot, pool: Arc<SqlitePool>) -> R
     bot.answer_callback_query(q.id.clone()).await?;
 
     if let Some(msg) = &q.message {
-        match core_logic::db::get_available_slots(&pool).await {
-            Ok(slots) => {
-                let mut keyboard_buttons = vec![];
+                    match core_logic::db::get_available_slots(&pool).await {
+                Ok(mut slots) => {
+                    // Сортируем слоты по времени (от ближайшего)
+                    slots.sort_by(|a, b| a.time.cmp(&b.time));
+                    
+                    let mut keyboard_buttons = vec![];
 
-                for slot in slots.iter().take(3) {
-                    let text = format!("📅 {} | 🏢 {}", 
-                        slot.time.format("%Y-%m-%d %H:%M"), 
-                        slot.place
-                    );
-                    let callback_data = format!("book_{}", slot.id);
-                    keyboard_buttons.push(vec![InlineKeyboardButton::new(
-                        text,
-                        InlineKeyboardButtonKind::CallbackData(callback_data),
-                    )]);
-                }
+                    for slot in slots.iter().take(3) {
+                        // Конвертируем UTC время в MSK (+3)
+                        let msk_time = slot.time + chrono::Duration::hours(3);
+                        let text = format!("📅 {} | 🏢 {}", 
+                            msk_time.format("%Y-%m-%d %H:%M"), 
+                            slot.place
+                        );
+                        let callback_data = format!("book_{}", slot.id);
+                        keyboard_buttons.push(vec![InlineKeyboardButton::new(
+                            text,
+                            InlineKeyboardButtonKind::CallbackData(callback_data),
+                        )]);
+                    }
 
                 if !keyboard_buttons.is_empty() {
                     let keyboard = InlineKeyboardMarkup::new(keyboard_buttons);
@@ -154,7 +159,9 @@ async fn handle_slot_selection(q: &CallbackQuery, bot: Bot, data: &str, pool: Ar
                 // Получаем информацию о слоте из БД
                 match core_logic::db::get_slot(&pool, slot_id).await {
                     Ok(Some(slot)) => {
-                        let time = slot.time.format("%Y-%m-%d %H:%M").to_string();
+                        // Конвертируем UTC время в MSK (+3)
+                        let msk_time = slot.time + chrono::Duration::hours(3);
+                        let time = msk_time.format("%Y-%m-%d %H:%M").to_string();
                         let place = slot.place.clone();
                         let message = UserMessage::SlotSelected { time, place };
                         let confirm_callback_data = format!("confirm_{}", slot_id);
@@ -220,7 +227,9 @@ async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str, pool: A
 
                     match core_logic::db::create_or_update_booking(&pool, user.id, Some(slot_id)).await {
                         Ok(_) => {
-                            let time = slot.time.format("%Y-%m-%d %H:%M").to_string();
+                            // Конвертируем UTC время в MSK (+3)
+                            let msk_time = slot.time + chrono::Duration::hours(3);
+                            let time = msk_time.format("%Y-%m-%d %H:%M").to_string();
                             let place = slot.place.clone();
                             let message = UserMessage::BookingConfirmed { time, place, name: String::new() };
                             bot.edit_message_text(msg.chat().id, msg.id(), message.to_string())
@@ -283,7 +292,9 @@ async fn notification_scheduler(bot: Bot, pool: Arc<SqlitePool>) {
         };
 
         for booking in bookings {
-            let time = booking.time.format("%H:%M").to_string();
+            // Конвертируем UTC время в MSK (+3)
+            let msk_time = booking.time + chrono::Duration::hours(3);
+            let time = msk_time.format("%H:%M").to_string();
             let place = booking.place.clone();
             let message = UserMessage::Reminder { time, place };
             if let Err(e) = bot.send_message(ChatId(booking.telegram_id), message.to_string())

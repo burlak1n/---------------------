@@ -4,6 +4,7 @@ import { slotsApi } from '../api';
 import type { Slot, CreateSlotRequest, UpdateSlotRequest } from '../types';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import { formatMSKTime } from '../utils/timeUtils';
 
 const Slots: React.FC = () => {
   const [slots, setSlots] = useState<Slot[]>([]);
@@ -405,9 +406,8 @@ const Slots: React.FC = () => {
           ) : (
             slots
               .sort((a, b) => {
-                const aRatio = (a.booked_count || 0) / a.max_user;
-                const bRatio = (b.booked_count || 0) / b.max_user;
-                return bRatio - aRatio; // Сначала более заполненные
+                // Сортируем по времени (от ближайшего)
+                return new Date(a.time).getTime() - new Date(b.time).getTime();
               })
               .map((slot) => (
               <div key={slot.id} className="px-6 py-4 hover:bg-gray-50">
@@ -416,7 +416,7 @@ const Slots: React.FC = () => {
                     <div className="flex items-center text-gray-600">
                       <Calendar className="h-5 w-5 mr-2" />
                       <span className="font-medium">
-                        {format(new Date(slot.time), 'dd MMMM yyyy, HH:mm', { locale: ru })}
+                        {formatMSKTime(slot.time, 'dd MMMM yyyy, HH:mm', ru)}
                       </span>
                     </div>
                     <div className="flex items-center text-gray-600">

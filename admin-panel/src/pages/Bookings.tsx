@@ -4,6 +4,7 @@ import { bookingsApi, usersApi, slotsApi } from '../api';
 import type { BookingRecord, User as UserType, Slot } from '../types';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import { formatMSKTime } from '../utils/timeUtils';
 
 interface BookingWithDetails extends BookingRecord {
   user?: UserType;
@@ -83,7 +84,18 @@ const Bookings: React.FC = () => {
               Нет бронирований
             </div>
           ) : (
-            bookings.map((booking) => (
+            bookings
+              .sort((a, b) => {
+                // Сортируем по времени слота (от ближайшего), если слот есть
+                if (a.slot && b.slot) {
+                  return new Date(a.slot.time).getTime() - new Date(b.slot.time).getTime();
+                }
+                // Если у одного из бронирований нет слота, помещаем его в конец
+                if (!a.slot) return 1;
+                if (!b.slot) return -1;
+                return 0;
+              })
+              .map((booking) => (
               <div key={booking.id} className="px-6 py-4 hover:bg-gray-50">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-6">
@@ -99,7 +111,7 @@ const Bookings: React.FC = () => {
                         <div className="flex items-center text-gray-600">
                           <Calendar className="h-5 w-5 mr-2" />
                           <span>
-                            {format(new Date(booking.slot.time), 'dd MMMM yyyy, HH:mm', { locale: ru })}
+                            {formatMSKTime(booking.slot.time, 'dd MMMM yyyy, HH:mm', ru)}
                           </span>
                         </div>
                         <div className="flex items-center text-gray-600">
@@ -113,7 +125,7 @@ const Bookings: React.FC = () => {
                       <div className="flex items-center text-gray-500">
                         <Clock className="h-4 w-4 mr-2" />
                         <span className="text-sm">
-                          Создано: {format(new Date(booking.created_at), 'dd.MM.yyyy HH:mm', { locale: ru })}
+                          Создано: {formatMSKTime(booking.created_at, 'dd.MM.yyyy HH:mm', ru)}
                         </span>
                       </div>
                     )}

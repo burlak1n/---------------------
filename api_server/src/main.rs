@@ -459,6 +459,7 @@ async fn create_broadcast(
         broadcast_id: result.broadcast_id.clone(),
         message: payload.message,
         target_users: users,
+        message_type: payload.message_type,
         created_at: chrono::Utc::now(),
     };
 

@@ -50,7 +50,7 @@ async fn handle_broadcast_event(
     info!("Event type: {:?}", event);
 
     match event {
-        BroadcastEvent::BroadcastCreated { broadcast_id, message, target_users, created_at } => {
+        BroadcastEvent::BroadcastCreated { broadcast_id, message, target_users, message_type, created_at } => {
             info!("Processing BroadcastCreated event for broadcast: {}", broadcast_id);
             
             // Используем переданных пользователей
@@ -65,7 +65,7 @@ async fn handle_broadcast_event(
                     user_id: user.id,
                     telegram_id: user.telegram_id,
                     message: message.clone(),
-                    message_type: None,
+                    message_type: message_type.clone(),
                     created_at,
                 };
 

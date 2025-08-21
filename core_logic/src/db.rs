@@ -5,7 +5,7 @@ use crate::{
     Slot, User, Record, Booking, CreateSlotRequest, CreateUserRequest, CreateBookingRequest,
     UpdateSlotRequest, UpdateUserRequest, BookingError, BookingInfo,
     // Event-Driven imports
-    BroadcastEvent, BroadcastEventRecord, BroadcastSummary, BroadcastStatus, BroadcastMessageRecord, MessageStatus,
+    BroadcastEvent, BroadcastEventRecord, BroadcastSummary, BroadcastStatus, BroadcastMessageRecord, MessageStatus, BroadcastMessageType,
     CreateBroadcastCommand, BroadcastCreatedResponse, RetryMessageCommand, CancelBroadcastCommand,
     GetBroadcastStatusQuery, GetBroadcastMessagesQuery, BroadcastStatusResponse,
 };
@@ -331,7 +331,13 @@ pub async fn save_broadcast_event(
 ) -> Result<(), sqlx::Error> {
     let event_id = uuid::Uuid::new_v4().to_string();
     let event_type = match event {
-        BroadcastEvent::BroadcastCreated { .. } => "BroadcastCreated",
+        BroadcastEvent::BroadcastCreated { message_type, .. } => {
+            if let Some(BroadcastMessageType::SignUp) = message_type {
+                "BroadcastCreatedSignUp"
+            } else {
+                "BroadcastCreated"
+            }
+        },
         BroadcastEvent::BroadcastStarted { .. } => "BroadcastStarted",
         BroadcastEvent::MessageSent { .. } => "MessageSent",
         BroadcastEvent::MessageFailed { .. } => "MessageFailed",
@@ -803,6 +809,7 @@ pub async fn handle_create_broadcast(
         broadcast_id: broadcast_id.clone(),
         message: command.message.clone(),
         target_users: users.clone(),
+        message_type: command.message_type.clone(),
         created_at: chrono::Utc::now(),
     };
     
