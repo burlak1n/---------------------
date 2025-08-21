@@ -1,4 +1,5 @@
 pub mod db;
+pub mod rabbitmq;
 
 pub use db::{
     get_available_slots,
@@ -30,6 +31,8 @@ pub use db::{
     // Query handlers
     handle_get_broadcast_status, handle_get_broadcast_messages,
 };
+
+pub use rabbitmq::{RabbitMQClient, EventsWorker, MessagesWorker};
 
 use chrono::{DateTime, Utc, NaiveDateTime};
 use serde::{Deserialize, Serialize};

@@ -19,8 +19,7 @@ use core_logic::{
     GetBroadcastStatusQuery, GetBroadcastMessagesQuery, RetryMessageCommand, CancelBroadcastCommand,
     BroadcastEvent,
 };
-mod rabbitmq;
-use rabbitmq::RabbitMQClient;
+use core_logic::RabbitMQClient;
 use sqlx::SqlitePool;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
