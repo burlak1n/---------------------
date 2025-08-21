@@ -3,12 +3,27 @@ use std::sync::Arc;
 use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardButtonKind, InlineKeyboardMarkup, ParseMode};
 use teloxide::utils::command::BotCommands;
-use chrono::{Utc, Datelike, TimeZone};
+use chrono::{Utc, Datelike, TimeZone, Timelike};
 use sqlx::SqlitePool;
 use core_logic::CreateUserRequest;
 use anyhow::Context;
 
 mod broadcast;
+
+// Функция для форматирования даты в русском стиле "25 сентября 18:30"
+fn format_russian_date(datetime: &chrono::DateTime<Utc>) -> String {
+    let month_names = [
+        "января", "февраля", "марта", "апреля", "мая", "июня",
+        "июля", "августа", "сентября", "октября", "ноября", "декабря"
+    ];
+    
+    let day = datetime.day();
+    let month = month_names[datetime.month0() as usize];
+    let hour = datetime.hour();
+    let minute = datetime.minute();
+    
+    format!("{} {} {}:{}", day, month, hour, format!("{:02}", minute))
+}
 
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "These commands are supported:")]
@@ -105,26 +120,24 @@ async fn handle_sign_up(q: &CallbackQuery, bot: Bot, pool: Arc<SqlitePool>) -> R
     bot.answer_callback_query(q.id.clone()).await?;
 
     if let Some(msg) = &q.message {
-                    match core_logic::db::get_available_slots(&pool).await {
-                Ok(mut slots) => {
-                    // Сортируем слоты по времени (от ближайшего)
-                    slots.sort_by(|a, b| a.time.cmp(&b.time));
-                    
-                    let mut keyboard_buttons = vec![];
+        match core_logic::db::get_best_slots_for_booking(&pool, 3).await {
+            Ok(slots) => {
+                // Слоты уже отсортированы по весу (40% места + 60% время)
+                let mut keyboard_buttons = vec![];
 
-                    for slot in slots.iter().take(3) {
-                        // Конвертируем UTC время в MSK (+3)
-                        let msk_time = slot.time + chrono::Duration::hours(3);
-                        let text = format!("📅 {} | 🏢 {}", 
-                            msk_time.format("%Y-%m-%d %H:%M"), 
-                            slot.place
-                        );
-                        let callback_data = format!("book_{}", slot.id);
-                        keyboard_buttons.push(vec![InlineKeyboardButton::new(
-                            text,
-                            InlineKeyboardButtonKind::CallbackData(callback_data),
-                        )]);
-                    }
+                for slot in slots {
+                    // Конвертируем UTC время в MSK (+3)
+                    let msk_time = slot.time + chrono::Duration::hours(3);
+                    let text = format!("📅 {} | 🏢 {}", 
+                        format_russian_date(&msk_time), 
+                        slot.place
+                    );
+                    let callback_data = format!("book_{}", slot.id);
+                    keyboard_buttons.push(vec![InlineKeyboardButton::new(
+                        text,
+                        InlineKeyboardButtonKind::CallbackData(callback_data),
+                    )]);
+                }
 
                 if !keyboard_buttons.is_empty() {
                     let keyboard = InlineKeyboardMarkup::new(keyboard_buttons);
@@ -161,7 +174,7 @@ async fn handle_slot_selection(q: &CallbackQuery, bot: Bot, data: &str, pool: Ar
                     Ok(Some(slot)) => {
                         // Конвертируем UTC время в MSK (+3)
                         let msk_time = slot.time + chrono::Duration::hours(3);
-                        let time = msk_time.format("%Y-%m-%d %H:%M").to_string();
+                        let time = format_russian_date(&msk_time);
                         let place = slot.place.clone();
                         let message = UserMessage::SlotSelected { time, place };
                         let confirm_callback_data = format!("confirm_{}", slot_id);
@@ -229,7 +242,7 @@ async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str, pool: A
                         Ok(_) => {
                             // Конвертируем UTC время в MSK (+3)
                             let msk_time = slot.time + chrono::Duration::hours(3);
-                            let time = msk_time.format("%Y-%m-%d %H:%M").to_string();
+                            let time = format_russian_date(&msk_time);
                             let place = slot.place.clone();
                             let message = UserMessage::BookingConfirmed { time, place, name: String::new() };
                             bot.edit_message_text(msg.chat().id, msg.id(), message.to_string())

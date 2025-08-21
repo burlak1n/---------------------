@@ -3,6 +3,7 @@ pub mod rabbitmq;
 
 pub use db::{
     get_available_slots,
+    get_best_slots_for_booking,
     get_all_slots,
     get_slot,
     create_or_update_booking,

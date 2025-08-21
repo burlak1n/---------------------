@@ -41,6 +41,69 @@ pub async fn get_available_slots(pool: &SqlitePool) -> Result<Vec<Slot>, sqlx::E
     .await
 }
 
+pub async fn get_best_slots_for_booking(pool: &SqlitePool, limit: i64) -> Result<Vec<Slot>, sqlx::Error> {
+    let now = chrono::Utc::now().naive_utc();
+    
+    // Получаем все доступные слоты одним эффективным запросом
+    let slots = sqlx::query_as::<_, Slot>(
+        r#"
+        SELECT
+            s.id,
+            s.time,
+            s.place,
+            s.max_user,
+            COUNT(r.id) as booked_count
+        FROM slots s
+        LEFT JOIN records r ON s.id = r.slot_id
+        WHERE s.time > ?
+        GROUP BY s.id, s.time, s.place, s.max_user
+        HAVING COUNT(r.id) < s.max_user
+        ORDER BY s.time ASC
+        "#
+    )
+    .bind(now)
+    .fetch_all(pool)
+    .await?;
+    
+    // Вычисляем вес для каждого слота и сортируем (ваша логика остается неизменной)
+    let mut slots_with_weights: Vec<(Slot, f64)> = slots
+        .into_iter()
+        .map(|slot| {
+            // Вычисляем вес: 40% места + 60% время
+            let free_slots = slot.max_user as f64 - (slot.booked_count.unwrap_or(0) as f64);
+            
+            let time_factor = if slot.time > chrono::Utc::now() {
+                let hours_until = (slot.time - chrono::Utc::now()).num_hours() as f64;
+                1.0 / (1.0 + hours_until * 0.1) // Убывает с удалением времени
+            } else {
+                0.0
+            };
+            
+            let weight = (free_slots * 0.4) + (time_factor * 100.0 * 0.6);
+            
+            println!("DEBUG: Слот {}: время={}, free_slots={}, time_factor={:.3}, weight={:.2}", 
+                     slot.id, slot.time, free_slots, time_factor, weight);
+            
+            (slot, weight)
+        })
+        .collect();
+    
+    // Сортируем по весу (по убыванию) и берем топ-N
+    slots_with_weights.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    
+    let result: Vec<Slot> = slots_with_weights
+        .into_iter()
+        .take(limit as usize)
+        .map(|(slot, _)| slot)
+        .collect();
+    
+    // Дополнительно сортируем результат по времени (хронологически) - ключевой шаг для вашей задачи
+    let mut final_result = result;
+    final_result.sort_by(|a, b| a.time.cmp(&b.time));
+    
+    Ok(final_result)
+}
+
 pub async fn get_all_slots(pool: &SqlitePool) -> Result<Vec<Slot>, sqlx::Error> {
     sqlx::query_as::<_, Slot>(
         "SELECT s.id, s.time, s.place, s.max_user, 

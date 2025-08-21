@@ -4,7 +4,7 @@ import { bookingsApi, usersApi, slotsApi } from '../api';
 import type { BookingRecord, User as UserType, Slot } from '../types';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
-import { formatMSKTime } from '../utils/timeUtils';
+import { formatTime } from '../utils/timeUtils';
 
 interface BookingWithDetails extends BookingRecord {
   user?: UserType;
@@ -111,7 +111,7 @@ const Bookings: React.FC = () => {
                         <div className="flex items-center text-gray-600">
                           <Calendar className="h-5 w-5 mr-2" />
                           <span>
-                            {formatMSKTime(booking.slot.time, 'dd MMMM yyyy, HH:mm', ru)}
+                            {formatTime(booking.slot.time, 'dd MMMM yyyy, HH:mm', ru)}
                           </span>
                         </div>
                         <div className="flex items-center text-gray-600">
@@ -125,7 +125,7 @@ const Bookings: React.FC = () => {
                       <div className="flex items-center text-gray-500">
                         <Clock className="h-4 w-4 mr-2" />
                         <span className="text-sm">
-                          Создано: {formatMSKTime(booking.created_at, 'dd.MM.yyyy HH:mm', ru)}
+                          Создано: {formatTime(booking.created_at, 'dd.MM.yyyy HH:mm', ru)}
                         </span>
                       </div>
                     )}

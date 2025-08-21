@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Calendar, Users, BookOpen, TrendingUp, Megaphone } from 'lucide-react';
 import { slotsApi, usersApi, bookingsApi } from '../api';
 import type { Slot, User, BookingRecord } from '../types';
+import TopSlots from '../components/TopSlots';
 
 const Dashboard: React.FC = () => {
   const [stats, setStats] = useState({
@@ -97,6 +98,9 @@ const Dashboard: React.FC = () => {
           );
         })}
       </div>
+
+      {/* Top Slots */}
+      <TopSlots />
 
       {/* Quick Actions */}
       <div className="bg-white rounded-lg shadow border border-gray-200">

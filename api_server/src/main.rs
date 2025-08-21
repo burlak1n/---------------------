@@ -99,6 +99,7 @@ async fn main() {
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .route("/slots", get(get_slots).post(create_slot))
         .route("/slots/all", get(get_all_slots))
+        .route("/slots/best", get(get_best_slots))
         .route("/slots/{id}", put(update_slot).delete(delete_slot))
         .route("/bookings", post(create_booking).get(get_bookings))
         .route("/bookings/{id}", delete(delete_booking))
@@ -163,6 +164,30 @@ async fn get_all_slots(State(state): State<AppState>) -> Result<Json<Vec<Slot>>,
         },
         Err(e) => {
             println!("❌ Ошибка при получении всех слотов: {}", e);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Database error: {}", e),
+            ))
+        },
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/slots/best",
+    responses(
+        (status = 200, description = "List top 3 best slots", body = [Slot])
+    )
+)]
+async fn get_best_slots(State(state): State<AppState>) -> Result<Json<Vec<Slot>>, (StatusCode, String)> {
+    println!("🏆 GET /slots/best - получение топ-3 лучших слотов");
+    match core_logic::db::get_best_slots_for_booking(&state.pool, 3).await {
+        Ok(slots) => {
+            println!("✅ Получено {} лучших слотов", slots.len());
+            Ok(Json(slots))
+        },
+        Err(e) => {
+            println!("❌ Ошибка при получении лучших слотов: {}", e);
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Database error: {}", e),

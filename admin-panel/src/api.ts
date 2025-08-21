@@ -36,6 +36,10 @@ export const slotsApi = {
     const response = await api.get<Slot[]>('/slots/all');
     return response.data;
   },
+  getBest: async (): Promise<Slot[]> => {
+    const response = await api.get<Slot[]>('/slots/best');
+    return response.data;
+  },
   create: async (slot: CreateSlotRequest): Promise<Slot> => {
     try {
       const response = await api.post<Slot>('/slots', slot);

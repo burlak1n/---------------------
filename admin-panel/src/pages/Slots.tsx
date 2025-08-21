@@ -4,7 +4,8 @@ import { slotsApi } from '../api';
 import type { Slot, CreateSlotRequest, UpdateSlotRequest } from '../types';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
-import { formatMSKTime } from '../utils/timeUtils';
+import { formatTime } from '../utils/timeUtils';
+import TopSlots from '../components/TopSlots';
 
 const Slots: React.FC = () => {
   const [slots, setSlots] = useState<Slot[]>([]);
@@ -193,7 +194,7 @@ const Slots: React.FC = () => {
 
   return (
     <div>
-      <div className="flex justify-between items-center mb-8">
+      <div className="flex justify-between items-center mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Управление слотами</h1>
           <p className="text-gray-600">Создание и управление временными слотами для собеседований</p>
@@ -206,6 +207,9 @@ const Slots: React.FC = () => {
           Создать слот
         </button>
       </div>
+
+      {/* Top Slots */}
+      <TopSlots />
 
       {/* Toggle Switch */}
       <div className="mb-6">
@@ -416,7 +420,7 @@ const Slots: React.FC = () => {
                     <div className="flex items-center text-gray-600">
                       <Calendar className="h-5 w-5 mr-2" />
                       <span className="font-medium">
-                        {formatMSKTime(slot.time, 'dd MMMM yyyy, HH:mm', ru)}
+                        {formatTime(slot.time, 'dd MMMM yyyy, HH:mm', ru)}
                       </span>
                     </div>
                     <div className="flex items-center text-gray-600">
