@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Send, Users, MessageCircle, AlertCircle, RefreshCw, X, CheckCircle, Clock, AlertTriangle } from 'lucide-react';
-import { broadcastApi } from '../api';
+import { broadcastApi, usersApi } from '../api';
 import type { 
   CreateBroadcastCommand, 
   BroadcastCreatedResponse, 
@@ -8,7 +8,8 @@ import type {
   BroadcastMessageRecord,
   BroadcastStatus,
   MessageStatus,
-  BroadcastSummary
+  BroadcastSummary,
+  User
 } from '../types';
 
 const Broadcast: React.FC = () => {
@@ -21,6 +22,12 @@ const Broadcast: React.FC = () => {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pollingInterval, setPollingInterval] = useState<NodeJS.Timeout | null>(null);
+  
+  // Состояние для выбора пользователей
+  const [users, setUsers] = useState<User[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [selectedUsers, setSelectedUsers] = useState<number[]>([]);
+  const [showUserSelection, setShowUserSelection] = useState(false);
 
   // Очистка интервала при размонтировании
   useEffect(() => {
@@ -71,6 +78,11 @@ const Broadcast: React.FC = () => {
     loadBroadcastHistory();
   }, []);
 
+  // Загрузка пользователей
+  useEffect(() => {
+    loadUsers();
+  }, [includeUsersWithoutTelegram]);
+
   const loadBroadcastHistory = async () => {
     setHistoryLoading(true);
     try {
@@ -80,6 +92,24 @@ const Broadcast: React.FC = () => {
       console.error('Failed to load broadcast history:', err);
     } finally {
       setHistoryLoading(false);
+    }
+  };
+
+  const loadUsers = async () => {
+    setUsersLoading(true);
+    try {
+      const allUsers = await usersApi.getAll();
+      // Фильтруем пользователей в зависимости от настройки
+      const filteredUsers = includeUsersWithoutTelegram 
+        ? allUsers 
+        : allUsers.filter(user => user.telegram_id);
+      setUsers(filteredUsers);
+      // Сбрасываем выбранных пользователей при изменении фильтра
+      setSelectedUsers([]);
+    } catch (err) {
+      console.error('Failed to load users:', err);
+    } finally {
+      setUsersLoading(false);
     }
   };
 
@@ -100,6 +130,7 @@ const Broadcast: React.FC = () => {
         message: message.trim(),
         include_users_without_telegram: includeUsersWithoutTelegram,
         message_type: 'custom',
+        selected_users: selectedUsers.length > 0 ? selectedUsers : undefined,
       };
 
       const response = await broadcastApi.create(command);
@@ -126,6 +157,7 @@ const Broadcast: React.FC = () => {
         message: "🎉 Поздравляем! Вы успешно прошли анкетирование и можете записаться на собеседование. Нажмите кнопку ниже для записи.",
         include_users_without_telegram: includeUsersWithoutTelegram,
         message_type: 'signup',
+        selected_users: selectedUsers.length > 0 ? selectedUsers : undefined,
       };
 
       const response = await broadcastApi.create(command);
@@ -223,6 +255,26 @@ const Broadcast: React.FC = () => {
     }
   };
 
+  // Функции для работы с выбором пользователей
+  const toggleUserSelection = (userId: number) => {
+    setSelectedUsers(prev => 
+      prev.includes(userId) 
+        ? prev.filter(id => id !== userId)
+        : [...prev, userId]
+    );
+  };
+
+  const selectAllUsers = () => {
+    setSelectedUsers(users.map(user => user.id));
+  };
+
+  const clearUserSelection = () => {
+    setSelectedUsers([]);
+  };
+
+  const getSelectedUsersCount = () => selectedUsers.length;
+  const getTotalUsersCount = () => users.length;
+
   const getStatusIcon = (status: BroadcastStatus) => {
     switch (status) {
       case 'pending':
@@ -311,6 +363,91 @@ const Broadcast: React.FC = () => {
                 Включить пользователей без Telegram ID
               </span>
             </label>
+          </div>
+
+          {/* Выбор пользователей */}
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-sm font-medium text-gray-700">
+                Выбор пользователей для рассылки
+              </label>
+              <button
+                type="button"
+                onClick={() => setShowUserSelection(!showUserSelection)}
+                className="text-sm text-blue-600 hover:text-blue-800"
+                disabled={loading || !!currentBroadcast}
+              >
+                {showUserSelection ? 'Скрыть' : 'Показать'} выбор
+              </button>
+            </div>
+            
+            {showUserSelection && (
+              <div className="border border-gray-300 rounded-md p-4 bg-gray-50">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-sm text-gray-600">
+                    Выбрано: {getSelectedUsersCount()} из {getTotalUsersCount()} пользователей
+                  </span>
+                  <div className="space-x-2">
+                    <button
+                      type="button"
+                      onClick={selectAllUsers}
+                      className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+                      disabled={usersLoading}
+                    >
+                      Выбрать всех
+                    </button>
+                    <button
+                      type="button"
+                      onClick={clearUserSelection}
+                      className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
+                      disabled={usersLoading}
+                    >
+                      Очистить
+                    </button>
+                  </div>
+                </div>
+
+                {usersLoading ? (
+                  <div className="text-center py-4">
+                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mx-auto"></div>
+                    <p className="mt-2 text-sm text-gray-600">Загрузка пользователей...</p>
+                  </div>
+                ) : (
+                  <div className="max-h-60 overflow-y-auto">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      {users.map(user => (
+                        <label key={user.id} className="flex items-center p-2 bg-white rounded border hover:bg-blue-50 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={selectedUsers.includes(user.id)}
+                            onChange={() => toggleUserSelection(user.id)}
+                            className="mr-2"
+                            disabled={loading || !!currentBroadcast}
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium text-gray-900 truncate">
+                              {user.name}
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              ID: {user.id}
+                              {user.telegram_id && ` • Telegram: ${user.telegram_id}`}
+                            </div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {selectedUsers.length > 0 && (
+                  <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded">
+                    <p className="text-sm text-blue-800">
+                      <strong>Примечание:</strong> Если пользователи не выбраны, рассылка будет отправлена всем доступным пользователям.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {error && (

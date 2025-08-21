@@ -53,12 +53,8 @@ async fn handle_broadcast_event(
         BroadcastEvent::BroadcastCreated { broadcast_id, message, target_users, created_at } => {
             info!("Processing BroadcastCreated event for broadcast: {}", broadcast_id);
             
-            // Получаем пользователей для рассылки
-            let users = if target_users.is_empty() {
-                core_logic::db::get_users_for_broadcast(pool, false).await?
-            } else {
-                target_users
-            };
+            // Используем переданных пользователей
+            let users = target_users;
 
             info!("Found {} users for broadcast", users.len());
 

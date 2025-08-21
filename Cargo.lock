@@ -691,6 +691,8 @@ dependencies = [
  "anyhow",
  "chrono",
  "dotenvy",
+ "futures-util",
+ "lapin",
  "serde",
  "serde_json",
  "sqlx",

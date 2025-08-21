@@ -74,6 +74,7 @@ export interface CreateBroadcastCommand {
   message: string;
   include_users_without_telegram: boolean;
   message_type?: 'custom' | 'signup';
+  selected_users?: number[]; // ID выбранных пользователей
 }
 
 export interface BroadcastCreatedResponse {

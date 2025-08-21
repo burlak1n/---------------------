@@ -287,6 +287,8 @@ async fn get_users(State(state): State<AppState>) -> Result<Json<Vec<User>>, (St
     }
 }
 
+
+
 #[utoipa::path(
     post,
     path = "/users",
@@ -429,6 +431,20 @@ async fn create_broadcast(
     State(state): State<AppState>, 
     Json(payload): Json<CreateBroadcastCommand>
 ) -> Result<Json<BroadcastCreatedResponse>, (StatusCode, String)> {
+    // Получаем пользователей для рассылки
+    let users = if let Some(selected_user_ids) = &payload.selected_users {
+        // Если указаны конкретные пользователи, получаем всех и фильтруем
+        let all_users = core_logic::db::get_users_for_broadcast(&state.pool, payload.include_users_without_telegram).await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get users: {}", e)))?;
+        all_users.into_iter()
+            .filter(|user| selected_user_ids.contains(&user.id))
+            .collect()
+    } else {
+        // Если пользователи не выбраны, получаем всех подходящих
+        core_logic::db::get_users_for_broadcast(&state.pool, payload.include_users_without_telegram).await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get users: {}", e)))?
+    };
+
     // Создаем рассылку в БД
     let result = match core_logic::db::handle_create_broadcast(&state.pool, payload.clone()).await {
         Ok(result) => result,
@@ -438,11 +454,11 @@ async fn create_broadcast(
         )),
     };
 
-    // Отправляем событие в RabbitMQ
+    // Отправляем событие в RabbitMQ с правильными пользователями
     let event = BroadcastEvent::BroadcastCreated {
         broadcast_id: result.broadcast_id.clone(),
         message: payload.message,
-        target_users: vec![], // Воркер получит пользователей из БД
+        target_users: users,
         created_at: chrono::Utc::now(),
     };
 

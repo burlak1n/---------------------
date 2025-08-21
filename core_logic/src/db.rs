@@ -805,7 +805,16 @@ pub async fn handle_create_broadcast(
     let broadcast_id = uuid::Uuid::new_v4().to_string();
     
     // Получаем пользователей
-    let users = get_users_for_broadcast(pool, command.include_users_without_telegram).await?;
+    let users = if let Some(selected_user_ids) = &command.selected_users {
+        // Если указаны конкретные пользователи, получаем всех и фильтруем
+        let all_users = get_users_for_broadcast(pool, command.include_users_without_telegram).await?;
+        all_users.into_iter()
+            .filter(|user| selected_user_ids.contains(&user.id))
+            .collect()
+    } else {
+        // Если пользователи не выбраны, получаем всех подходящих
+        get_users_for_broadcast(pool, command.include_users_without_telegram).await?
+    };
     
     // Создаем событие
     let event = BroadcastEvent::BroadcastCreated {
@@ -834,23 +843,8 @@ pub async fn handle_create_broadcast(
     
     create_broadcast_summary(pool, &summary).await?;
     
-    // Создаем записи сообщений
-    for user in users {
-        let message_record = BroadcastMessageRecord {
-            id: 0, // Будет установлено БД
-            broadcast_id: broadcast_id.clone(),
-            user_id: user.id,
-            telegram_id: user.telegram_id,
-            status: MessageStatus::Pending,
-            error: None,
-            sent_at: None,
-            retry_count: 0,
-            message_type: None, // Пока не используем тип сообщения
-            created_at: chrono::Utc::now().naive_utc(),
-        };
-        
-        create_broadcast_message(pool, &message_record).await?;
-    }
+    // Записи сообщений будут созданы воркером событий
+    // чтобы избежать дублирования
     
     Ok(BroadcastCreatedResponse {
         broadcast_id,

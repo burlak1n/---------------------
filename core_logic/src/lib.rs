@@ -382,6 +382,7 @@ pub struct CreateBroadcastCommand {
     pub message: String,
     pub include_users_without_telegram: bool,
     pub message_type: Option<BroadcastMessageType>,
+    pub selected_users: Option<Vec<i64>>, // ID выбранных пользователей
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
