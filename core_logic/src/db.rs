@@ -10,6 +10,12 @@ use crate::{
     GetBroadcastStatusQuery, GetBroadcastMessagesQuery, BroadcastStatusResponse,
 };
 
+// Константы для магических чисел
+const DEFAULT_QUERY_LIMIT: i32 = 100;
+const DEFAULT_QUERY_OFFSET: i32 = 0;
+const DEFAULT_BROADCAST_SUMMARIES_LIMIT: i32 = 50;
+const DEFAULT_BROADCAST_SUMMARIES_OFFSET: i32 = 0;
+
 pub async fn init_db() -> Result<SqlitePool, anyhow::Error> {
     let db_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     if !Sqlite::database_exists(&db_url).await.unwrap_or(false) {
@@ -587,8 +593,8 @@ pub async fn get_all_broadcast_summaries(
     limit: Option<i32>,
     offset: Option<i32>,
 ) -> Result<Vec<BroadcastSummary>, sqlx::Error> {
-    let limit = limit.unwrap_or(50);
-    let offset = offset.unwrap_or(0);
+    let limit = limit.unwrap_or(DEFAULT_BROADCAST_SUMMARIES_LIMIT);
+    let offset = offset.unwrap_or(DEFAULT_BROADCAST_SUMMARIES_OFFSET);
     
     let records = sqlx::query!(
         "SELECT id, message, total_users, sent_count, failed_count, pending_count, status, created_at, started_at, completed_at 
@@ -705,34 +711,13 @@ pub async fn get_broadcast_messages(
     limit: Option<i32>,
     offset: Option<i32>,
 ) -> Result<Vec<BroadcastMessageRecord>, sqlx::Error> {
-    let mut query = "SELECT id, broadcast_id, user_id, telegram_id, status, error, sent_at, retry_count, created_at 
-                     FROM broadcast_messages 
-                     WHERE broadcast_id = ?".to_string();
+    let limit = limit.unwrap_or(DEFAULT_QUERY_LIMIT);
+    let offset = offset.unwrap_or(DEFAULT_QUERY_OFFSET);
     
-    let mut params: Vec<Box<dyn sqlx::Encode<'_, sqlx::Sqlite> + Send + Sync>> = vec![Box::new(broadcast_id.to_string())];
-    
-    if let Some(status) = &status {
-        query.push_str(" AND status = ?");
-        params.push(Box::new(status.to_string()));
-    }
-    
-    query.push_str(" ORDER BY created_at ASC");
-    
-    if let Some(limit) = limit {
-        query.push_str(" LIMIT ?");
-        params.push(Box::new(limit));
-    }
-    
-    if let Some(offset) = offset {
-        query.push_str(" OFFSET ?");
-        params.push(Box::new(offset));
-    }
 
-    // Упрощенная версия без динамического SQL
+    
     let records = if let Some(status) = &status {
         let status_str = status.to_string();
-        let limit_val = limit.unwrap_or(100i32);
-        let offset_val = offset.unwrap_or(0i32);
         
         sqlx::query!(
             "SELECT id, broadcast_id, user_id, telegram_id, status, error, sent_at, retry_count, created_at 
@@ -742,8 +727,8 @@ pub async fn get_broadcast_messages(
              LIMIT ? OFFSET ?",
             broadcast_id,
             status_str,
-            limit_val,
-            offset_val
+            limit,
+            offset
         )
         .fetch_all(pool)
         .await?
@@ -762,9 +747,6 @@ pub async fn get_broadcast_messages(
         })
         .collect()
     } else {
-        let limit_val = limit.unwrap_or(100i32);
-        let offset_val = offset.unwrap_or(0i32);
-        
         sqlx::query!(
             "SELECT id, broadcast_id, user_id, telegram_id, status, error, sent_at, retry_count, created_at 
              FROM broadcast_messages 
@@ -772,8 +754,8 @@ pub async fn get_broadcast_messages(
              ORDER BY created_at ASC
              LIMIT ? OFFSET ?",
             broadcast_id,
-            limit_val,
-            offset_val
+            limit,
+            offset
         )
         .fetch_all(pool)
         .await?
@@ -905,7 +887,7 @@ pub async fn handle_get_broadcast_status(
     
     match summary {
         Some(broadcast) => {
-            let messages = get_broadcast_messages(pool, &query.broadcast_id, None, Some(100), Some(0)).await?;
+            let messages = get_broadcast_messages(pool, &query.broadcast_id, None, Some(DEFAULT_QUERY_LIMIT), Some(DEFAULT_QUERY_OFFSET)).await?;
             
             Ok(Some(BroadcastStatusResponse {
                 broadcast,
