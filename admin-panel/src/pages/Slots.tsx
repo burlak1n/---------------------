@@ -14,6 +14,7 @@ const Slots: React.FC = () => {
   const [showEditForm, setShowEditForm] = useState(false);
   const [editingSlot, setEditingSlot] = useState<Slot | null>(null);
   const [showAvailableOnly, setShowAvailableOnly] = useState(true);
+  const [operationLoading, setOperationLoading] = useState<number | null>(null); // ID слота для операции
   const [newSlot, setNewSlot] = useState<CreateSlotRequest>({
     start_time: '',
     place: '',
@@ -25,6 +26,21 @@ const Slots: React.FC = () => {
     max_users: 1,
   });
 
+  // Функция для сортировки слотов по времени
+  const sortSlots = (slotsToSort: Slot[]) => {
+    return [...slotsToSort].sort((a, b) => {
+      return new Date(a.time).getTime() - new Date(b.time).getTime();
+    });
+  };
+
+  // Функция для обновления состояния слотов с автоматической сортировкой
+  const updateSlots = (updater: (prevSlots: Slot[]) => Slot[]) => {
+    setSlots(prevSlots => {
+      const newSlots = updater(prevSlots);
+      return sortSlots(newSlots);
+    });
+  };
+
   useEffect(() => {
     fetchSlots();
   }, [showAvailableOnly]);
@@ -34,7 +50,7 @@ const Slots: React.FC = () => {
       const data = showAvailableOnly 
         ? await slotsApi.getAll()
         : await slotsApi.getAllSlots();
-      setSlots(data);
+      updateSlots(() => data);
     } catch (error) {
       console.error('Error fetching slots:', error);
     } finally {
@@ -50,6 +66,9 @@ const Slots: React.FC = () => {
       alert('Пожалуйста, выберите дату и время');
       return;
     }
+    
+    // Устанавливаем индикатор загрузки
+    setOperationLoading(-1); // -1 для создания нового слота
     
     try {
       // Конвертируем локальное время пользователя в UTC для отправки на сервер
@@ -69,13 +88,39 @@ const Slots: React.FC = () => {
       console.log('- Время после localToUTC (UTC):', slotData.start_time);
       console.log('- Время как Date объект:', dateTime);
       
-      await slotsApi.create(slotData);
+      // Создаем временный слот для оптимистичного обновления
+      const tempSlot: Slot = {
+        id: Date.now(), // Временный ID
+        time: slotData.start_time,
+        place: slotData.place,
+        max_user: slotData.max_users,
+        booked_count: 0
+      };
+      
+      // Оптимистично добавляем слот в интерфейс
+      updateSlots(prevSlots => [tempSlot, ...prevSlots]);
+      
+      const createdSlot = await slotsApi.create(slotData);
+      
+      // Заменяем временный слот на реальный
+      updateSlots(prevSlots => 
+        prevSlots.map(slot => 
+          slot.id === tempSlot.id ? createdSlot : slot
+        )
+      );
+      
       setNewSlot({ start_time: '', place: '', max_users: 1 });
       setShowCreateForm(false);
-      fetchSlots();
+      // fetchSlots(); // Убираем, так как обновляем локально
     } catch (error: any) {
       console.error('Error creating slot:', error);
+      
+      // Убираем временный слот в случае ошибки
+      setSlots(prevSlots => prevSlots.filter(slot => slot.id !== Date.now()));
+      
       alert(`Ошибка при создании слота: ${error.message}`);
+    } finally {
+      setOperationLoading(null);
     }
   };
 
@@ -125,6 +170,12 @@ const Slots: React.FC = () => {
       return;
     }
     
+    // Сохраняем текущее состояние для отката в случае ошибки
+    const previousSlots = [...slots];
+    
+    // Устанавливаем индикатор загрузки
+    setOperationLoading(editingSlot.id);
+    
     try {
       // Конвертируем локальное время пользователя в UTC для отправки на сервер
       const slotData = {
@@ -138,18 +189,23 @@ const Slots: React.FC = () => {
       console.log('- Текущее время слота (UTC):', editingSlot.time);
       console.log('Отправляем данные для обновления:', slotData);
       
-      await slotsApi.update(editingSlot.id, slotData);
-      
-      console.log('Слот успешно обновлен, обновляем список...');
-      
-      // Обновляем локальное состояние
-      setSlots(prevSlots => 
+      // Оптимистично обновляем интерфейс
+      updateSlots(prevSlots => 
         prevSlots.map(slot => 
           slot.id === editingSlot.id 
-            ? { ...slot, ...slotData, max_user: slotData.max_users || slot.max_user }
+            ? {
+                ...slot,
+                time: slotData.start_time ? slotData.start_time : slot.time,
+                place: slotData.place || slot.place,
+                max_user: slotData.max_users || slot.max_user
+              }
             : slot
         )
       );
+      
+      await slotsApi.update(editingSlot.id, slotData);
+      
+      console.log('Слот успешно обновлен');
       
       setEditSlot({ start_time: '', place: '', max_users: 1 });
       setShowEditForm(false);
@@ -157,18 +213,41 @@ const Slots: React.FC = () => {
       // fetchSlots(); // Убираем, так как обновляем локально
     } catch (error: any) {
       console.error('Error updating slot:', error);
+      
+      // Откатываем изменения в случае ошибки
+      setSlots(previousSlots);
+      
       alert(`Ошибка при обновлении слота: ${error.message}`);
+    } finally {
+      setOperationLoading(null);
     }
   };
 
   const handleDeleteSlot = async (slotId: number) => {
     if (!confirm('Вы уверены, что хотите удалить этот слот?')) return;
     
+    // Сохраняем текущее состояние для отката в случае ошибки
+    const previousSlots = [...slots];
+    
+    // Устанавливаем индикатор загрузки
+    setOperationLoading(slotId);
+    
+    // Оптимистично убираем слот из интерфейса
+    updateSlots(prevSlots => prevSlots.filter(slot => slot.id !== slotId));
+    
     try {
       await slotsApi.delete(slotId);
-      fetchSlots();
-    } catch (error) {
+      
+      // fetchSlots(); // Убираем, так как обновляем локально
+    } catch (error: any) {
       console.error('Error deleting slot:', error);
+      
+      // Откатываем изменения в случае ошибки
+      setSlots(previousSlots);
+      
+      alert(`Ошибка при удалении слота: ${error.message}`);
+    } finally {
+      setOperationLoading(null);
     }
   };
 
@@ -303,9 +382,19 @@ const Slots: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                  disabled={operationLoading === -1}
+                  className={`px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors ${
+                    operationLoading === -1 ? 'opacity-50 cursor-not-allowed' : ''
+                  }`}
                 >
-                  Создать
+                  {operationLoading === -1 ? (
+                    <div className="flex items-center">
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
+                      Создание...
+                    </div>
+                  ) : (
+                    'Создать'
+                  )}
                 </button>
               </div>
             </form>
@@ -386,9 +475,19 @@ const Slots: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                  disabled={operationLoading === editingSlot.id}
+                  className={`px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors ${
+                    operationLoading === editingSlot.id ? 'opacity-50 cursor-not-allowed' : ''
+                  }`}
                 >
-                  Сохранить
+                  {operationLoading === editingSlot.id ? (
+                    <div className="flex items-center">
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
+                      Сохранение...
+                    </div>
+                  ) : (
+                    'Сохранить'
+                  )}
                 </button>
               </div>
             </form>
@@ -416,13 +515,11 @@ const Slots: React.FC = () => {
               {showAvailableOnly ? 'Нет доступных слотов' : 'Слотов не найдено'}
             </div>
           ) : (
-            slots
-              .sort((a, b) => {
-                // Сортируем по времени (от ближайшего)
-                return new Date(a.time).getTime() - new Date(b.time).getTime();
-              })
-              .map((slot) => (
-              <div key={slot.id} className="px-6 py-4 hover:bg-gray-50">
+            slots.map((slot) => (
+              <div 
+                key={slot.id} 
+                className="px-6 py-4 hover:bg-gray-50 transition-all duration-200 ease-in-out transform hover:scale-[1.01]"
+              >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-4">
                     <div className="flex items-center text-gray-600">
@@ -470,17 +567,31 @@ const Slots: React.FC = () => {
                     )}
                     <button
                       onClick={() => openEditForm(slot)}
-                      className="p-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded"
+                      disabled={operationLoading === slot.id}
+                      className={`p-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors ${
+                        operationLoading === slot.id ? 'opacity-50 cursor-not-allowed' : ''
+                      }`}
                       title="Редактировать"
                     >
-                      <Edit className="h-4 w-4" />
+                      {operationLoading === slot.id ? (
+                        <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                      ) : (
+                        <Edit className="h-4 w-4" />
+                      )}
                     </button>
                     <button
                       onClick={() => handleDeleteSlot(slot.id)}
-                      className="p-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded"
+                      disabled={operationLoading === slot.id}
+                      className={`p-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors ${
+                        operationLoading === slot.id ? 'opacity-50 cursor-not-allowed' : ''
+                      }`}
                       title="Удалить"
                     >
-                      <Trash2 className="h-4 w-4" />
+                      {operationLoading === slot.id ? (
+                        <div className="w-4 h-4 border-2 border-red-600 border-t-transparent rounded-full animate-spin"></div>
+                      ) : (
+                        <Trash2 className="h-4 w-4" />
+                      )}
                     </button>
                   </div>
                 </div>
