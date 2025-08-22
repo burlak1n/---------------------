@@ -4,7 +4,7 @@ import { slotsApi } from '../api';
 import type { Slot, CreateSlotRequest, UpdateSlotRequest } from '../types';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
-import { formatTime } from '../utils/timeUtils';
+import { formatTime, utcToLocalInput, localToUTC } from '../utils/timeUtils';
 import TopSlots from '../components/TopSlots';
 
 const Slots: React.FC = () => {
@@ -52,7 +52,7 @@ const Slots: React.FC = () => {
     }
     
     try {
-      // Преобразуем строку даты в ISO формат
+      // Конвертируем локальное время пользователя в UTC для отправки на сервер
       const dateTime = new Date(newSlot.start_time);
       if (isNaN(dateTime.getTime())) {
         alert('Некорректный формат даты');
@@ -61,8 +61,13 @@ const Slots: React.FC = () => {
       
       const slotData = {
         ...newSlot,
-        start_time: dateTime.toISOString()
+        start_time: localToUTC(dateTime)
       };
+      
+      console.log('Отладочная информация о создании слота:');
+      console.log('- Введенное время в форме (локальное):', newSlot.start_time);
+      console.log('- Время после localToUTC (UTC):', slotData.start_time);
+      console.log('- Время как Date объект:', dateTime);
       
       await slotsApi.create(slotData);
       setNewSlot({ start_time: '', place: '', max_users: 1 });
@@ -121,12 +126,16 @@ const Slots: React.FC = () => {
     }
     
     try {
-      // Преобразуем строку даты в ISO формат если она есть
+      // Конвертируем локальное время пользователя в UTC для отправки на сервер
       const slotData = {
         ...editSlot,
-        start_time: editSlot.start_time ? new Date(editSlot.start_time).toISOString() : undefined
+        start_time: editSlot.start_time ? localToUTC(editSlot.start_time) : undefined
       };
       
+      console.log('Отладочная информация о времени:');
+      console.log('- Введенное время в форме (локальное):', editSlot.start_time);
+      console.log('- Время после localToUTC (UTC):', slotData.start_time);
+      console.log('- Текущее время слота (UTC):', editingSlot.time);
       console.log('Отправляем данные для обновления:', slotData);
       
       await slotsApi.update(editingSlot.id, slotData);
@@ -168,12 +177,11 @@ const Slots: React.FC = () => {
     
     setEditingSlot(slot);
     
-    // Преобразуем ISO дату в формат datetime-local
-    const date = new Date(slot.time);
-    const localDateTime = date.toISOString().slice(0, 16);
+    // Конвертируем UTC время с сервера в локальное время для input
+    const inputDateTime = utcToLocalInput(slot.time);
     
     const initialEditData = {
-      start_time: localDateTime,
+      start_time: inputDateTime,
       place: slot.place,
       max_users: slot.max_user,
     };

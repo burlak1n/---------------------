@@ -16,6 +16,12 @@ const DEFAULT_QUERY_OFFSET: i32 = 0;
 const DEFAULT_BROADCAST_SUMMARIES_LIMIT: i32 = 50;
 const DEFAULT_BROADCAST_SUMMARIES_OFFSET: i32 = 0;
 
+// Константы для алгоритма ранжирования слотов
+const SLOT_RANKING_FREE_SLOTS_WEIGHT: f64 = 0.5;
+const SLOT_RANKING_TIME_WEIGHT: f64 = 0.5;
+const SLOT_RANKING_TIME_SCALE: f64 = 100.0;
+const SLOT_RANKING_HALF_LIFE_HOURS: f64 = 48.0;
+
 pub async fn init_db() -> Result<SqlitePool, anyhow::Error> {
     let db_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     if !Sqlite::database_exists(&db_url).await.unwrap_or(false) {
@@ -41,8 +47,23 @@ pub async fn get_available_slots(pool: &SqlitePool) -> Result<Vec<Slot>, sqlx::E
     .await
 }
 
+/// Вычисляет вес слота для ранжирования
+fn calculate_slot_weight(slot: &Slot) -> f64 {
+    let free_slots = slot.max_user as f64 - (slot.booked_count.unwrap_or(0) as f64);
+    
+    let time_factor = if slot.time > Utc::now() {
+        let hours_until = (slot.time - Utc::now()).num_hours() as f64;
+        (-hours_until / SLOT_RANKING_HALF_LIFE_HOURS).exp()
+    } else {
+        0.0
+    };
+    
+    (free_slots * SLOT_RANKING_FREE_SLOTS_WEIGHT) + 
+    (time_factor * SLOT_RANKING_TIME_SCALE * SLOT_RANKING_TIME_WEIGHT)
+}
+
 pub async fn get_best_slots_for_booking(pool: &SqlitePool, limit: i64) -> Result<Vec<Slot>, sqlx::Error> {
-    let now = chrono::Utc::now().naive_utc();
+    let now = Utc::now().naive_utc();
     
     // Получаем все доступные слоты одним эффективным запросом
     let slots = sqlx::query_as::<_, Slot>(
@@ -52,12 +73,14 @@ pub async fn get_best_slots_for_booking(pool: &SqlitePool, limit: i64) -> Result
             s.time,
             s.place,
             s.max_user,
-            COUNT(r.id) as booked_count
+            COALESCE(booked_counts.count, 0) as booked_count
         FROM slots s
-        LEFT JOIN records r ON s.id = r.slot_id
-        WHERE s.time > ?
-        GROUP BY s.id, s.time, s.place, s.max_user
-        HAVING COUNT(r.id) < s.max_user
+        LEFT JOIN (
+            SELECT slot_id, COUNT(*) as count 
+            FROM records 
+            GROUP BY slot_id
+        ) booked_counts ON s.id = booked_counts.slot_id
+        WHERE s.time > ? AND COALESCE(booked_counts.count, 0) < s.max_user
         ORDER BY s.time ASC
         "#
     )
@@ -65,25 +88,11 @@ pub async fn get_best_slots_for_booking(pool: &SqlitePool, limit: i64) -> Result
     .fetch_all(pool)
     .await?;
     
-    // Вычисляем вес для каждого слота и сортируем (ваша логика остается неизменной)
+    // Вычисляем вес для каждого слота и сортируем
     let mut slots_with_weights: Vec<(Slot, f64)> = slots
         .into_iter()
         .map(|slot| {
-            // Вычисляем вес: 40% места + 60% время
-            let free_slots = slot.max_user as f64 - (slot.booked_count.unwrap_or(0) as f64);
-            
-            let time_factor = if slot.time > chrono::Utc::now() {
-                let hours_until = (slot.time - chrono::Utc::now()).num_hours() as f64;
-                1.0 / (1.0 + hours_until * 0.1) // Убывает с удалением времени
-            } else {
-                0.0
-            };
-            
-            let weight = (free_slots * 0.4) + (time_factor * 100.0 * 0.6);
-            
-            println!("DEBUG: Слот {}: время={}, free_slots={}, time_factor={:.3}, weight={:.2}", 
-                     slot.id, slot.time, free_slots, time_factor, weight);
-            
+            let weight = calculate_slot_weight(&slot);
             (slot, weight)
         })
         .collect();
@@ -97,7 +106,7 @@ pub async fn get_best_slots_for_booking(pool: &SqlitePool, limit: i64) -> Result
         .map(|(slot, _)| slot)
         .collect();
     
-    // Дополнительно сортируем результат по времени (хронологически) - ключевой шаг для вашей задачи
+    // Дополнительно сортируем результат по времени (хронологически)
     let mut final_result = result;
     final_result.sort_by(|a, b| a.time.cmp(&b.time));
     
