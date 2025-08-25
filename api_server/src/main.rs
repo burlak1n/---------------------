@@ -106,9 +106,9 @@ async fn main() {
         .route("/users", get(get_users).post(create_user))
         .route("/users/{id}", put(update_user).delete(delete_user))
         // Event-Driven broadcast endpoints
-            .route("/broadcast", post(create_broadcast).get(get_all_broadcasts))
-    .route("/broadcast/{id}", delete(delete_broadcast))
-    .route("/broadcast/{id}/status", get(get_broadcast_status))
+        .route("/broadcast", post(create_broadcast).get(get_all_broadcasts))
+        .route("/broadcast/{id}", delete(delete_broadcast))
+        .route("/broadcast/{id}/status", get(get_broadcast_status))
         .route("/broadcast/{id}/messages", get(get_broadcast_messages))
         .route("/broadcast/{id}/retry", post(retry_broadcast_message))
         .route("/broadcast/{id}/cancel", post(cancel_broadcast))

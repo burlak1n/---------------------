@@ -120,3 +120,19 @@ export interface RetryMessageCommand {
   broadcast_id: string;
   user_id: number;
 }
+
+// External API Types
+export interface ExternalUser {
+  _id: {
+    $oid: string;
+  };
+  telegram_id: number;
+  created_at: string;
+  completed_surveys: string[];
+}
+
+export interface ExternalUsersResponse {
+  users: ExternalUser[];
+  total: number;
+  last_sync?: string;
+}

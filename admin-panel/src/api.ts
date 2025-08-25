@@ -17,10 +17,20 @@ import type {
   BroadcastMessageRecord,
   RetryMessageCommand,
   BroadcastSummary,
+  // External API types
+  ExternalUser,
 } from './types';
 
 const api = axios.create({
   baseURL: 'http://localhost:3000',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+// Отдельный instance для внешнего API
+const externalApi = axios.create({
+  baseURL: 'https://ingroupsts.ru',
   headers: {
     'Content-Type': 'application/json',
   },
@@ -161,4 +171,59 @@ export const broadcastApi = {
     const response = await api.post<BroadcastResponse>('/broadcast', request);
     return response.data;
   },
+};
+
+// External Users API
+export const externalUsersApi = {
+  // Получение пользователей с завершенными анкетами
+  getCompletedUsers: async (): Promise<ExternalUser[]> => {
+    try {
+      const response = await externalApi.get<ExternalUser[]>('/api/users/completed');
+      return response.data;
+    } catch (error: any) {
+      console.error('Error fetching external users:', error);
+      throw new Error(error.response?.data || 'Ошибка при получении пользователей из внешнего API');
+    }
+  },
+
+  // Получение пользователей с кэшированием
+  getCompletedUsersCached: async (): Promise<ExternalUser[]> => {
+    const cacheKey = 'external_users_cache';
+    const cacheTimeout = 5 * 60 * 1000; // 5 минут
+
+    // Проверяем кэш
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      const { data, timestamp } = JSON.parse(cached);
+      if (Date.now() - timestamp < cacheTimeout) {
+        return data;
+      }
+    }
+
+    // Получаем свежие данные
+    const users = await externalUsersApi.getCompletedUsers();
+    
+    // Сохраняем в кэш
+    localStorage.setItem(cacheKey, JSON.stringify({
+      data: users,
+      timestamp: Date.now()
+    }));
+
+    return users;
+  },
+
+  // Очистка кэша
+  clearCache: (): void => {
+    localStorage.removeItem('external_users_cache');
+  },
+
+  // Проверка доступности внешнего API
+  checkHealth: async (): Promise<boolean> => {
+    try {
+      await externalApi.get('/api/users/completed');
+      return true;
+    } catch {
+      return false;
+    }
+  }
 };
