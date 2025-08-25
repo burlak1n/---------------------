@@ -15,6 +15,7 @@ const Slots: React.FC = () => {
   const [editingSlot, setEditingSlot] = useState<Slot | null>(null);
   const [showAvailableOnly, setShowAvailableOnly] = useState(true);
   const [operationLoading, setOperationLoading] = useState<number | null>(null); // ID слота для операции
+  const [topSlotsRefreshTrigger, setTopSlotsRefreshTrigger] = useState(0); // Триггер для обновления топ-слотов
   const [newSlot, setNewSlot] = useState<CreateSlotRequest>({
     start_time: '',
     place: '',
@@ -43,6 +44,8 @@ const Slots: React.FC = () => {
 
   useEffect(() => {
     fetchSlots();
+    // Обновляем топ-слоты при изменении фильтра
+    setTopSlotsRefreshTrigger(prev => prev + 1);
   }, [showAvailableOnly]);
 
   const fetchSlots = async () => {
@@ -108,6 +111,9 @@ const Slots: React.FC = () => {
           slot.id === tempSlot.id ? createdSlot : slot
         )
       );
+      
+      // Обновляем топ-слоты
+      setTopSlotsRefreshTrigger(prev => prev + 1);
       
       setNewSlot({ start_time: '', place: '', max_users: 1 });
       setShowCreateForm(false);
@@ -210,6 +216,10 @@ const Slots: React.FC = () => {
       setEditSlot({ start_time: '', place: '', max_users: 1 });
       setShowEditForm(false);
       setEditingSlot(null);
+      
+      // Обновляем топ-слоты
+      setTopSlotsRefreshTrigger(prev => prev + 1);
+      
       // fetchSlots(); // Убираем, так как обновляем локально
     } catch (error: any) {
       console.error('Error updating slot:', error);
@@ -237,6 +247,9 @@ const Slots: React.FC = () => {
     
     try {
       await slotsApi.delete(slotId);
+      
+      // Обновляем топ-слоты
+      setTopSlotsRefreshTrigger(prev => prev + 1);
       
       // fetchSlots(); // Убираем, так как обновляем локально
     } catch (error: any) {
@@ -296,7 +309,7 @@ const Slots: React.FC = () => {
       </div>
 
       {/* Top Slots */}
-      <TopSlots />
+      <TopSlots refreshTrigger={topSlotsRefreshTrigger} />
 
       {/* Toggle Switch */}
       <div className="mb-6">

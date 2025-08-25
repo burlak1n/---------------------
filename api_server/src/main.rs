@@ -180,8 +180,8 @@ async fn get_all_slots(State(state): State<AppState>) -> Result<Json<Vec<Slot>>,
     )
 )]
 async fn get_best_slots(State(state): State<AppState>) -> Result<Json<Vec<Slot>>, (StatusCode, String)> {
-    println!("🏆 GET /slots/best - получение топ-3 лучших слотов");
-    match core_logic::db::get_best_slots_for_booking(&state.pool, 3).await {
+    println!("🏆 GET /slots/best - получение топ-6 лучших слотов");
+    match core_logic::db::get_best_slots_for_booking(&state.pool, 6).await {
         Ok(slots) => {
             println!("✅ Получено {} лучших слотов", slots.len());
             Ok(Json(slots))
