@@ -136,8 +136,8 @@ impl RabbitMQClient {
             )
             .await?;
 
-        info!("Message published to RabbitMQ: user_id={}, broadcast_id={}", 
-              message.user_id, message.broadcast_id);
+        info!("Message published to RabbitMQ: telegram_id={}, broadcast_id={}", 
+              message.telegram_id, message.broadcast_id);
         Ok(())
     }
 
@@ -347,9 +347,8 @@ impl MessagesWorker {
             };
 
             info!("=== PROCESSING BROADCAST MESSAGE ===");
-            info!("User ID: {}", message.user_id);
+            info!("Telegram ID: {}", message.telegram_id);
             info!("Broadcast ID: {}", message.broadcast_id);
-            info!("Telegram ID: {:?}", message.telegram_id);
 
             // Обрабатываем сообщение
             match handler(message).await {

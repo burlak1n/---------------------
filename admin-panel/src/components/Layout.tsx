@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
-import { Calendar, Users, BookOpen, Home, Megaphone, ExternalLink } from 'lucide-react';
+import { Calendar, BookOpen, Home, Megaphone, Users } from 'lucide-react';
 
 const Layout: React.FC = () => {
   const location = useLocation();
@@ -8,8 +8,7 @@ const Layout: React.FC = () => {
   const navItems = [
     { path: '/', label: 'Главная', icon: Home },
     { path: '/slots', label: 'Слоты', icon: Calendar },
-    { path: '/users', label: 'Пользователи', icon: Users },
-    { path: '/external-users', label: 'Внешние пользователи', icon: ExternalLink },
+    { path: '/external-users', label: 'Пользователи', icon: Users },
     { path: '/bookings', label: 'Бронирования', icon: BookOpen },
     { path: '/broadcast', label: 'Рассылка', icon: Megaphone },
   ];

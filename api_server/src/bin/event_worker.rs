@@ -57,12 +57,14 @@ async fn handle_broadcast_event(
             let users = target_users;
 
             info!("Found {} users for broadcast", users.len());
+            for user in &users {
+                info!("  - telegram_id: {}, name: {}", user.telegram_id, user.name);
+            }
 
             // Создаем сообщения для каждого пользователя
             for user in users {
                 let message_record = BroadcastMessage {
                     broadcast_id: broadcast_id.clone(),
-                    user_id: user.id,
                     telegram_id: user.telegram_id,
                     message: message.clone(),
                     message_type: message_type.clone(),
@@ -73,7 +75,6 @@ async fn handle_broadcast_event(
                 let message_db_record = core_logic::BroadcastMessageRecord {
                     id: 0, // Будет заполнено БД
                     broadcast_id: message_record.broadcast_id.clone(),
-                    user_id: message_record.user_id,
                     telegram_id: message_record.telegram_id,
                     status: MessageStatus::Pending,
                     error: None,
@@ -87,7 +88,7 @@ async fn handle_broadcast_event(
                 core_logic::db::create_broadcast_message(pool, &message_db_record).await?;
 
                 // Отправляем сообщение в RabbitMQ
-                    info!("Publishing message to RabbitMQ for user {} in broadcast {}", user.id, broadcast_id);
+                    info!("Publishing message to RabbitMQ for telegram_id {} in broadcast {}", user.telegram_id, broadcast_id);
                 match rabbitmq_client.publish_message(&message_record).await {
                         Ok(_) => {
                         info!("✅ Message published to RabbitMQ successfully");
@@ -100,7 +101,7 @@ async fn handle_broadcast_event(
                         core_logic::db::update_broadcast_message_status(
                             pool,
                             &message_record.broadcast_id,
-                            &message_record.user_id,
+                            message_record.telegram_id,
                             MessageStatus::Failed,
                             Some(error_msg),
                         ).await?;

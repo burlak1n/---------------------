@@ -36,13 +36,13 @@ async fn handle_message(
 
     match send_result {
         Ok(_) => {
-            info!("✅ Successfully sent message to user {}", message.user_id);
+            info!("✅ Successfully sent message to user {}", message.telegram_id);
             
             // Обновляем статус на "sent"
             if let Err(e) = core_logic::db::update_broadcast_message_status(
                 pool,
                 &message.broadcast_id,
-                &message.user_id,
+                message.telegram_id,
                 MessageStatus::Sent,
                 None,
             ).await {
@@ -51,13 +51,13 @@ async fn handle_message(
         }
         Err(e) => {
             let error_msg = e.to_string();
-            error!("❌ Failed to send message to user {}: {}", message.user_id, error_msg);
+            error!("❌ Failed to send message to user {}: {}", message.telegram_id, error_msg);
             
             // Обновляем статус на "failed"
             if let Err(e) = core_logic::db::update_broadcast_message_status(
                 pool,
                 &message.broadcast_id,
-                &message.user_id,
+                message.telegram_id,
                 MessageStatus::Failed,
                 Some(error_msg),
             ).await {
@@ -73,7 +73,7 @@ async fn send_telegram_message(
     bot: &Bot,
     message: &BroadcastMessage,
 ) -> Result<(), Error> {
-    if let Some(telegram_id) = message.telegram_id {
+    let telegram_id = message.telegram_id;
         info!("Sending message to Telegram user {}", telegram_id);
         
         let result = if let Some(core_logic::BroadcastMessageType::SignUp) = message.message_type {
@@ -109,8 +109,4 @@ async fn send_telegram_message(
                 Err(anyhow::Error::new(e))
             }
         }
-    } else {
-        error!("No telegram_id provided for user {}", message.user_id);
-        Err(anyhow::anyhow!("No telegram_id provided"))
-    }
 }

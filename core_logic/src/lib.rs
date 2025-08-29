@@ -68,7 +68,7 @@ pub struct Slot {
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize, ToSchema)]
 pub struct Record {
     pub id: i64,
-    pub user_id: i64,
+    pub telegram_id: i64,
     pub slot_id: Option<i64>,
     pub created_at: Option<DateTime<Utc>>,
 }
@@ -102,7 +102,7 @@ pub struct ApiSlot {
 #[derive(Debug, Deserialize, Serialize, ToSchema)]
 pub struct Booking {
     pub slot_id: String,
-    pub user_id: i64,
+    pub telegram_id: i64,
 }
 
 
@@ -113,12 +113,11 @@ pub struct ApiResponse {
     pub message: String,
 }
 
-// Новая структура для пользователя API
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize, ToSchema)]
+// Структура для пользователей (только telegram_id)
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, FromRow)]
 pub struct User {
-    pub id: i64,
+    pub telegram_id: i64,
     pub name: String,
-    pub telegram_id: Option<i64>,
 }
 
 // Новая структура для ответа API со слотами
@@ -175,14 +174,14 @@ pub struct CreateSlotRequest {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateBookingRequest {
     pub slot_id: String,
-    pub user_id: i64,
+    pub telegram_id: i64,
 }
 
 // Новая структура для запроса на создание пользователя
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateUserRequest {
     pub name: String,
-    pub telegram_id: Option<i64>,
+    pub telegram_id: i64,
 }
 
 // Новая структура для запроса на обновление слота
@@ -203,7 +202,6 @@ pub struct UpdateBookingRequest {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateUserRequest {
     pub name: Option<String>,
-    pub telegram_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -214,8 +212,7 @@ pub struct BroadcastRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BroadcastMessage {
-    pub user_id: i64,
-    pub telegram_id: Option<i64>,
+    pub telegram_id: i64,
     pub message: String,
     pub broadcast_id: String,
     pub message_type: Option<BroadcastMessageType>,
@@ -249,20 +246,17 @@ pub enum BroadcastEvent {
     },
     MessageSent {
         broadcast_id: String,
-        user_id: i64,
         telegram_id: i64,
         sent_at: DateTime<Utc>,
     },
     MessageFailed {
         broadcast_id: String,
-        user_id: i64,
         telegram_id: i64,
         error: String,
         failed_at: DateTime<Utc>,
     },
     MessageRetrying {
         broadcast_id: String,
-        user_id: i64,
         telegram_id: i64,
         retry_count: u32,
         retry_at: DateTime<Utc>,
@@ -336,8 +330,7 @@ impl From<String> for BroadcastStatus {
 pub struct BroadcastMessageRecord {
     pub id: i64,
     pub broadcast_id: String,
-    pub user_id: i64,
-    pub telegram_id: Option<i64>,
+    pub telegram_id: i64, // Только telegram_id для внешних пользователей
     pub status: MessageStatus,
     pub error: Option<String>,
     pub sent_at: Option<NaiveDateTime>,
@@ -382,9 +375,8 @@ impl From<String> for MessageStatus {
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 pub struct CreateBroadcastCommand {
     pub message: String,
-    pub include_users_without_telegram: bool,
     pub message_type: Option<BroadcastMessageType>,
-    pub selected_users: Option<Vec<i64>>, // ID выбранных пользователей
+    pub selected_external_users: Option<Vec<String>>, // telegram_id выбранных внешних пользователей
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
@@ -397,7 +389,7 @@ pub enum BroadcastMessageType {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct RetryMessageCommand {
     pub broadcast_id: String,
-    pub user_id: i64,
+    pub telegram_id: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

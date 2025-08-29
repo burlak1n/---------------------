@@ -19,7 +19,11 @@ import type {
   BroadcastSummary,
   // External API types
   ExternalUser,
+  UserSurvey,
+  SurveyStructure,
+  SurveyStatistics,
 } from './types';
+import { CSVDataManager, type ParsedSurveyResponse } from './utils/csvUtils';
 
 const api = axios.create({
   baseURL: 'http://localhost:3000',
@@ -175,8 +179,28 @@ export const broadcastApi = {
 
 // External Users API
 export const externalUsersApi = {
+  // Флаг для переключения между внешним API и CSV режимом
+  useCSVMode: false,
+  
+  // CSV менеджер для работы с локальными данными
+  csvManager: CSVDataManager.getInstance(),
+
   // Получение пользователей с завершенными анкетами
   getCompletedUsers: async (): Promise<ExternalUser[]> => {
+    if (externalUsersApi.useCSVMode) {
+      const csvData = await externalUsersApi.csvManager.loadData();
+      return csvData
+        .filter(user => user.telegram_id > 0)
+        .map(user => ({
+          telegram_id: user.telegram_id,
+          full_name: user.full_name,
+          faculty: user.faculty,
+          group: user.group,
+          phone: user.phone,
+          completed_at: user.created_at
+        }));
+    }
+
     try {
       const response = await externalApi.get<ExternalUser[]>('/api/users/completed');
       return response.data;
@@ -188,6 +212,10 @@ export const externalUsersApi = {
 
   // Получение пользователей с кэшированием
   getCompletedUsersCached: async (): Promise<ExternalUser[]> => {
+    if (externalUsersApi.useCSVMode) {
+      return await externalUsersApi.getCompletedUsers();
+    }
+
     const cacheKey = 'external_users_cache';
     const cacheTimeout = 5 * 60 * 1000; // 5 минут
 
@@ -212,13 +240,153 @@ export const externalUsersApi = {
     return users;
   },
 
+  // Получение анкеты пользователя
+  getUserSurvey: async (telegramId: number): Promise<UserSurvey> => {
+    if (externalUsersApi.useCSVMode) {
+      // Убеждаемся, что CSV данные загружены
+      await externalUsersApi.csvManager.loadData();
+      const csvUser = externalUsersApi.csvManager.getUserSurvey(telegramId);
+      if (!csvUser) {
+        throw new Error('Пользователь не найден');
+      }
+
+      return {
+        telegram_id: csvUser.telegram_id,
+        full_name: csvUser.full_name,
+        faculty: csvUser.faculty,
+        group: csvUser.group,
+        phone: csvUser.phone,
+        email: undefined,
+        birth_date: undefined,
+        education_level: undefined,
+        experience: undefined,
+        skills: csvUser.q2.filter(skill => skill && skill.trim()),
+        interests: [csvUser.q3, csvUser.q4, csvUser.q5, csvUser.q6, csvUser.q7, csvUser.q8, csvUser.q9]
+          .filter(interest => interest && interest.trim()),
+        completed_at: csvUser.created_at,
+        survey_data: {
+          q1: csvUser.q1,
+          q9: csvUser.q9, // Передаем данные рисунка
+          completion_time_seconds: csvUser.completion_time_seconds,
+          survey_id: csvUser.survey_id,
+          username: csvUser.username,
+          request_id: csvUser.request_id
+        }
+      };
+    }
+
+    try {
+      const response = await externalApi.get<UserSurvey>(`/api/users/${telegramId}/survey`);
+      return response.data;
+    } catch (error: any) {
+      console.error('Error fetching user survey:', error);
+      throw new Error(error.response?.data || 'Ошибка при получении анкеты пользователя');
+    }
+  },
+
+  // Получение всех записей пользователей
+  getUserBookings: async (): Promise<BookingRecord[]> => {
+    try {
+      const response = await api.get<BookingRecord[]>('/bookings');
+      return response.data;
+    } catch (error: any) {
+      console.error('Error fetching user bookings:', error);
+      throw new Error(error.response?.data || 'Ошибка при получении записей пользователей');
+    }
+  },
+
+  // Переключение режима работы
+  toggleCSVMode: (useCSV: boolean) => {
+    externalUsersApi.useCSVMode = useCSV;
+    if (useCSV) {
+      externalUsersApi.csvManager.clearCache();
+    }
+  },
+
+  // Получение статистики CSV данных
+  getCSVStats: async () => {
+    if (!externalUsersApi.useCSVMode) {
+      throw new Error('CSV режим не включен');
+    }
+    await externalUsersApi.csvManager.loadData();
+    return externalUsersApi.csvManager.getStats();
+  },
+
+  // Получение структуры активной анкеты
+  getActiveSurvey: async (): Promise<SurveyStructure> => {
+    if (externalUsersApi.useCSVMode) {
+      const csvStructure = await externalUsersApi.csvManager.loadSurveyStructure();
+      if (!csvStructure) {
+        throw new Error('Структура анкеты не найдена в CSV режиме');
+      }
+      return csvStructure;
+    }
+
+    try {
+      const response = await externalApi.get<SurveyStructure>('/api/survey');
+      return response.data;
+    } catch (error: any) {
+      console.error('Error fetching active survey:', error);
+      throw new Error(error.response?.data || 'Ошибка при получении структуры анкеты');
+    }
+  },
+
+  // Получение статистики анкеты
+  getSurveyStatistics: async (): Promise<SurveyStatistics> => {
+    if (externalUsersApi.useCSVMode) {
+      // Убеждаемся, что CSV данные загружены
+      const csvData = await externalUsersApi.csvManager.loadData();
+      const questionStats = externalUsersApi.csvManager.getQuestionStats();
+      
+      if (!questionStats) {
+        throw new Error('Статистика недоступна в CSV режиме');
+      }
+
+      // Вычисляем общую статистику
+      const totalResponses = csvData.length;
+      const completedResponses = csvData.filter(user => user.telegram_id > 0).length;
+      const completionRate = totalResponses > 0 ? completedResponses / totalResponses : 0;
+      
+      // Среднее время заполнения
+      const avgTime = csvData.reduce((sum, user) => sum + user.completion_time_seconds, 0) / totalResponses;
+
+      return {
+        total_responses: totalResponses,
+        completion_rate: completionRate,
+        average_completion_time: avgTime,
+        question_stats: questionStats
+      };
+    }
+
+    try {
+      const response = await externalApi.get<SurveyStatistics>('/api/survey/stats');
+      return response.data;
+    } catch (error: any) {
+      console.error('Error fetching survey statistics:', error);
+      throw new Error(error.response?.data || 'Ошибка при получении статистики анкеты');
+    }
+  },
+
   // Очистка кэша
   clearCache: (): void => {
-    localStorage.removeItem('external_users_cache');
+    if (externalUsersApi.useCSVMode) {
+      externalUsersApi.csvManager.clearCache();
+    } else {
+      localStorage.removeItem('external_users_cache');
+    }
   },
 
   // Проверка доступности внешнего API
   checkHealth: async (): Promise<boolean> => {
+    if (externalUsersApi.useCSVMode) {
+      try {
+        await externalUsersApi.csvManager.loadData();
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
     try {
       await externalApi.get('/api/users/completed');
       return true;

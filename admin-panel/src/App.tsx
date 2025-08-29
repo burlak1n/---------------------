@@ -2,7 +2,6 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import Slots from './pages/Slots';
-import Users from './pages/Users';
 import ExternalUsers from './pages/ExternalUsers';
 import Bookings from './pages/Bookings';
 import Broadcast from './pages/Broadcast';
@@ -15,7 +14,6 @@ function App() {
         <Route path="/" element={<Layout />}>
           <Route index element={<Dashboard />} />
           <Route path="slots" element={<Slots />} />
-          <Route path="users" element={<Users />} />
           <Route path="external-users" element={<ExternalUsers />} />
           <Route path="bookings" element={<Bookings />} />
           <Route path="broadcast" element={<Broadcast />} />

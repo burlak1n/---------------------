@@ -1,13 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { Calendar, Users, BookOpen, TrendingUp, Megaphone } from 'lucide-react';
-import { slotsApi, usersApi, bookingsApi } from '../api';
-import type { Slot, User, BookingRecord } from '../types';
+import { Calendar, BookOpen, TrendingUp, Megaphone } from 'lucide-react';
+import { slotsApi, bookingsApi } from '../api';
+import type { Slot, BookingRecord } from '../types';
 import TopSlots from '../components/TopSlots';
 
 const Dashboard: React.FC = () => {
   const [stats, setStats] = useState({
     slots: 0,
-    users: 0,
     bookings: 0,
   });
   const [loading, setLoading] = useState(true);
@@ -15,15 +14,13 @@ const Dashboard: React.FC = () => {
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const [slots, users, bookings] = await Promise.all([
+        const [slots, bookings] = await Promise.all([
           slotsApi.getAll(),
-          usersApi.getAll(),
           bookingsApi.getAll(),
         ]);
 
         setStats({
           slots: slots.length,
-          users: users.length,
           bookings: bookings.length,
         });
       } catch (error) {
@@ -42,12 +39,6 @@ const Dashboard: React.FC = () => {
       value: stats.slots,
       icon: Calendar,
       color: 'bg-blue-500',
-    },
-    {
-      title: 'Пользователи',
-      value: stats.users,
-      icon: Users,
-      color: 'bg-green-500',
     },
     {
       title: 'Бронирования',
@@ -108,15 +99,12 @@ const Dashboard: React.FC = () => {
           <h2 className="text-lg font-medium text-gray-900">Быстрые действия</h2>
         </div>
         <div className="p-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <button className="flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
               <Calendar className="mr-2 h-4 w-4" />
               Создать новый слот
             </button>
-            <button className="flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
-              <Users className="mr-2 h-4 w-4" />
-              Добавить пользователя
-            </button>
+
             <button className="flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-purple-600 hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500">
               <Megaphone className="mr-2 h-4 w-4" />
               Отправить рассылку

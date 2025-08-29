@@ -392,10 +392,10 @@ async fn delete_slot(
 )]
 async fn update_user(
     State(state): State<AppState>, 
-    Path(user_id): Path<i64>, 
+    Path(telegram_id): Path<i64>, 
     Json(payload): Json<UpdateUserRequest>
 ) -> Result<Json<User>, (StatusCode, String)> {
-    match core_logic::db::update_user(&state.pool, user_id, payload).await {
+    match core_logic::db::update_user(&state.pool, telegram_id, payload).await {
         Ok(user) => Ok(Json(user)),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -413,9 +413,9 @@ async fn update_user(
 )]
 async fn delete_user(
     State(state): State<AppState>, 
-    Path(user_id): Path<i64>
+    Path(telegram_id): Path<i64>
 ) -> Result<StatusCode, (StatusCode, String)> {
-    match core_logic::db::delete_user(&state.pool, user_id).await {
+    match core_logic::db::delete_user(&state.pool, telegram_id).await {
         Ok(_) => Ok(StatusCode::NO_CONTENT),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -456,41 +456,41 @@ async fn create_broadcast(
     State(state): State<AppState>, 
     Json(payload): Json<CreateBroadcastCommand>
 ) -> Result<Json<BroadcastCreatedResponse>, (StatusCode, String)> {
-    // Получаем пользователей для рассылки
-    let users = if let Some(selected_user_ids) = &payload.selected_users {
-        // Если указаны конкретные пользователи, получаем всех и фильтруем
-        let all_users = core_logic::db::get_users_for_broadcast(&state.pool, payload.include_users_without_telegram).await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get users: {}", e)))?;
-        all_users.into_iter()
-            .filter(|user| selected_user_ids.contains(&user.id))
-            .collect()
-    } else {
-        // Если пользователи не выбраны, получаем всех подходящих
-        core_logic::db::get_users_for_broadcast(&state.pool, payload.include_users_without_telegram).await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get users: {}", e)))?
-    };
+    println!("=== CREATE BROADCAST REQUEST ===");
+    println!("Message: {}", payload.message);
+    println!("Selected users: {:?}", payload.selected_users);
+    println!("Selected external users: {:?}", payload.selected_external_users);
+    println!("Include users without telegram: {}", payload.include_users_without_telegram);
+    
+    // ЗАКОММЕНТИРОВАНО: Логика работы с локальными пользователями
+    // let users = if let Some(selected_user_ids) = &payload.selected_users {
+    //     let all_users = core_logic::db::get_users_for_broadcast(&state.pool, payload.include_users_without_telegram).await
+    //         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get users: {}", e)))?;
+    //     all_users.into_iter()
+    //         .filter(|user| selected_user_ids.contains(&user.id))
+    //         .collect()
+    // } else {
+    //     core_logic::db::get_users_for_broadcast(&state.pool, payload.include_users_without_telegram).await
+    //         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get users: {}", e)))?
+    // };
 
-    // Создаем рассылку в БД
-    let result = match core_logic::db::handle_create_broadcast(&state.pool, payload.clone()).await {
-        Ok(result) => result,
+    // Создаем рассылку в БД (пользователи будут обработаны внутри handle_create_broadcast)
+    let (result, event) = match core_logic::db::handle_create_broadcast(&state.pool, payload.clone()).await {
+        Ok((result, event)) => (result, event),
         Err(e) => return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to create broadcast: {}", e),
         )),
     };
 
-    // Отправляем событие в RabbitMQ с правильными пользователями
-    let event = BroadcastEvent::BroadcastCreated {
-        broadcast_id: result.broadcast_id.clone(),
-        message: payload.message,
-        target_users: users,
-        message_type: payload.message_type,
-        created_at: chrono::Utc::now(),
-    };
+    println!("Broadcast created with ID: {}", result.broadcast_id);
 
+    // Отправляем событие в RabbitMQ
     if let Err(e) = state.rabbitmq.publish_event(&event).await {
         eprintln!("Failed to publish broadcast event: {}", e);
         // Не возвращаем ошибку, так как рассылка уже создана в БД
+    } else {
+        println!("Event published to RabbitMQ successfully");
     }
 
     Ok(Json(result))
@@ -603,7 +603,7 @@ async fn retry_broadcast_message(
 ) -> Result<StatusCode, (StatusCode, String)> {
     let command = RetryMessageCommand {
         broadcast_id,
-        user_id: payload.user_id,
+        telegram_id: payload.telegram_id,
     };
     
     match core_logic::db::handle_retry_message(&state.pool, command).await {

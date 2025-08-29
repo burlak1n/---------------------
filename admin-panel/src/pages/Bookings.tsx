@@ -1,13 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Calendar, User, Clock, Trash2 } from 'lucide-react';
-import { bookingsApi, usersApi, slotsApi } from '../api';
-import type { BookingRecord, User as UserType, Slot } from '../types';
+import { bookingsApi, slotsApi } from '../api';
+import type { BookingRecord, Slot } from '../types';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { formatTime } from '../utils/timeUtils';
 
 interface BookingWithDetails extends BookingRecord {
-  user?: UserType;
   slot?: Slot;
 }
 
@@ -21,20 +20,17 @@ const Bookings: React.FC = () => {
 
   const fetchBookings = async () => {
     try {
-      const [bookingsData, usersData, slotsData] = await Promise.all([
+      const [bookingsData, slotsData] = await Promise.all([
         bookingsApi.getAll(),
-        usersApi.getAll(),
         slotsApi.getAll(),
       ]);
 
       // Объединяем данные
       const bookingsWithDetails = bookingsData.map((booking) => {
-        const user = usersData.find((u) => u.id === booking.user_id);
         const slot = booking.slot_id ? slotsData.find((s) => s.id === booking.slot_id) : undefined;
         
         return {
           ...booking,
-          user,
           slot,
         };
       });

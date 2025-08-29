@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Send, Users, MessageCircle, AlertCircle, RefreshCw, X, CheckCircle, Clock, AlertTriangle } from 'lucide-react';
-import { broadcastApi, usersApi } from '../api';
+import { Send, Users, MessageCircle, AlertCircle, RefreshCw, X, CheckCircle, Clock, AlertTriangle, Eye } from 'lucide-react';
+import { broadcastApi, externalUsersApi } from '../api';
 import type { 
   CreateBroadcastCommand, 
   BroadcastCreatedResponse, 
@@ -9,31 +9,37 @@ import type {
   BroadcastStatus,
   MessageStatus,
   BroadcastSummary,
-  User
+  ExternalUser
 } from '../types';
+import UserProfile from '../components/UserProfile';
 
 const Broadcast: React.FC = () => {
   const [message, setMessage] = useState('');
-  const [includeUsersWithoutTelegram, setIncludeUsersWithoutTelegram] = useState(false);
   const [loading, setLoading] = useState(false);
   const [currentBroadcast, setCurrentBroadcast] = useState<BroadcastCreatedResponse | null>(null);
   const [broadcastStatus, setBroadcastStatus] = useState<BroadcastStatusResponse | null>(null);
   const [broadcastHistory, setBroadcastHistory] = useState<BroadcastSummary[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pollingInterval, setPollingInterval] = useState<NodeJS.Timeout | null>(null);
+  const [pollingInterval, setPollingInterval] = useState<number | null>(null);
   
   // Состояние для выбора пользователей
-  const [users, setUsers] = useState<User[]>([]);
-  const [usersLoading, setUsersLoading] = useState(false);
-  const [selectedUsers, setSelectedUsers] = useState<number[]>([]);
   const [showUserSelection, setShowUserSelection] = useState(false);
+
+  // Состояние для внешних пользователей
+  const [externalUsers, setExternalUsers] = useState<ExternalUser[]>([]);
+  const [externalUsersLoading, setExternalUsersLoading] = useState(false);
+  const [selectedExternalUsers, setSelectedExternalUsers] = useState<string[]>([]);
+
+  // Состояние для профиля пользователя
+  const [selectedUserProfile, setSelectedUserProfile] = useState<number | null>(null);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
 
   // Очистка интервала при размонтировании
   useEffect(() => {
     return () => {
       if (pollingInterval) {
-        clearInterval(pollingInterval);
+        window.clearInterval(pollingInterval);
       }
     };
   }, [pollingInterval]);
@@ -42,7 +48,7 @@ const Broadcast: React.FC = () => {
   useEffect(() => {
     // Очищаем предыдущий интервал при изменении currentBroadcast
     if (pollingInterval) {
-      clearInterval(pollingInterval);
+      window.clearInterval(pollingInterval);
       setPollingInterval(null);
     }
 
@@ -81,7 +87,7 @@ const Broadcast: React.FC = () => {
   // Загрузка пользователей
   useEffect(() => {
     loadUsers();
-  }, [includeUsersWithoutTelegram]);
+  }, []);
 
   const loadBroadcastHistory = async () => {
     setHistoryLoading(true);
@@ -96,20 +102,19 @@ const Broadcast: React.FC = () => {
   };
 
   const loadUsers = async () => {
-    setUsersLoading(true);
+    setExternalUsersLoading(true);
+    
     try {
-      const allUsers = await usersApi.getAll();
-      // Фильтруем пользователей в зависимости от настройки
-      const filteredUsers = includeUsersWithoutTelegram 
-        ? allUsers 
-        : allUsers.filter(user => user.telegram_id);
-      setUsers(filteredUsers);
-      // Сбрасываем выбранных пользователей при изменении фильтра
-      setSelectedUsers([]);
+      // Загружаем внешних пользователей
+      const externalData = await externalUsersApi.getCompletedUsersCached();
+      setExternalUsers(externalData);
+
+      // Сбрасываем выбранных пользователей
+      setSelectedExternalUsers([]);
     } catch (err) {
       console.error('Failed to load users:', err);
     } finally {
-      setUsersLoading(false);
+      setExternalUsersLoading(false);
     }
   };
 
@@ -128,9 +133,8 @@ const Broadcast: React.FC = () => {
     try {
       const command: CreateBroadcastCommand = {
         message: message.trim(),
-        include_users_without_telegram: includeUsersWithoutTelegram,
         message_type: 'custom',
-        selected_users: selectedUsers.length > 0 ? selectedUsers : undefined,
+        selected_external_users: selectedExternalUsers.length > 0 ? selectedExternalUsers : undefined,
       };
 
       const response = await broadcastApi.create(command);
@@ -155,9 +159,8 @@ const Broadcast: React.FC = () => {
     try {
       const command: CreateBroadcastCommand = {
         message: "🎉 Поздравляем! Вы успешно прошли анкетирование и можете записаться на собеседование. Нажмите кнопку ниже для записи.",
-        include_users_without_telegram: includeUsersWithoutTelegram,
         message_type: 'signup',
-        selected_users: selectedUsers.length > 0 ? selectedUsers : undefined,
+        selected_external_users: selectedExternalUsers.length > 0 ? selectedExternalUsers : undefined,
       };
 
       const response = await broadcastApi.create(command);
@@ -180,7 +183,7 @@ const Broadcast: React.FC = () => {
       setCurrentBroadcast(null);
       setBroadcastStatus(null);
       if (pollingInterval) {
-        clearInterval(pollingInterval);
+        window.clearInterval(pollingInterval);
         setPollingInterval(null);
       }
     } catch (err) {
@@ -205,6 +208,16 @@ const Broadcast: React.FC = () => {
     }
   };
 
+  const handleViewProfile = (telegramId: number) => {
+    setSelectedUserProfile(telegramId);
+    setIsProfileOpen(true);
+  };
+
+  const handleCloseProfile = () => {
+    setIsProfileOpen(false);
+    setSelectedUserProfile(null);
+  };
+
   const handleViewDetails = async (broadcastId: string) => {
     try {
       const status = await broadcastApi.getStatus(broadcastId);
@@ -215,7 +228,7 @@ const Broadcast: React.FC = () => {
         // Если рассылка завершена, останавливаем polling
         if (status.broadcast.status === 'completed' || status.broadcast.status === 'failed') {
           if (pollingInterval) {
-            clearInterval(pollingInterval);
+            window.clearInterval(pollingInterval);
             setPollingInterval(null);
           }
         }
@@ -242,7 +255,7 @@ const Broadcast: React.FC = () => {
         setCurrentBroadcast(null);
         setBroadcastStatus(null);
         if (pollingInterval) {
-          clearInterval(pollingInterval);
+          window.clearInterval(pollingInterval);
           setPollingInterval(null);
         }
       }
@@ -256,24 +269,24 @@ const Broadcast: React.FC = () => {
   };
 
   // Функции для работы с выбором пользователей
-  const toggleUserSelection = (userId: number) => {
-    setSelectedUsers(prev => 
+  const toggleExternalUserSelection = (userId: string) => {
+    setSelectedExternalUsers(prev => 
       prev.includes(userId) 
         ? prev.filter(id => id !== userId)
         : [...prev, userId]
     );
   };
 
-  const selectAllUsers = () => {
-    setSelectedUsers(users.map(user => user.id));
+  const selectAllExternalUsers = () => {
+    setSelectedExternalUsers(externalUsers.map(user => user.telegram_id.toString()));
   };
 
   const clearUserSelection = () => {
-    setSelectedUsers([]);
+    setSelectedExternalUsers([]);
   };
 
-  const getSelectedUsersCount = () => selectedUsers.length;
-  const getTotalUsersCount = () => users.length;
+  const getSelectedExternalUsersCount = () => selectedExternalUsers.length;
+  const getTotalExternalUsersCount = () => externalUsers.length;
 
   const getStatusIcon = (status: BroadcastStatus) => {
     switch (status) {
@@ -351,19 +364,43 @@ const Broadcast: React.FC = () => {
           </div>
 
           <div className="mb-4">
-            <label className="flex items-center">
-              <input
-                type="checkbox"
-                checked={includeUsersWithoutTelegram}
-                onChange={(e) => setIncludeUsersWithoutTelegram(e.target.checked)}
-                className="mr-2"
-                disabled={loading || !!currentBroadcast}
-              />
-              <span className="text-sm text-gray-700">
-                Включить пользователей без Telegram ID
-              </span>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Источник пользователей
             </label>
+            <div className="space-y-2">
+              <label className="flex items-center">
+                <input
+                  type="radio"
+                  value="external"
+                  checked={true}
+                  disabled={true}
+                  className="mr-2"
+                />
+                <span className="text-sm text-gray-700">
+                  Пользователи (с завершенными анкетами)
+                </span>
+              </label>
+            </div>
           </div>
+
+          {/* ЗАКОММЕНТИРОВАНО: Чекбокс для локальных пользователей без Telegram ID
+          {userSource === 'local' || userSource === 'both' ? (
+            <div className="mb-4">
+              <label className="flex items-center">
+                <input
+                  type="checkbox"
+                  checked={includeUsersWithoutTelegram}
+                  onChange={(e) => setIncludeUsersWithoutTelegram(e.target.checked)}
+                  className="mr-2"
+                  disabled={loading || !!currentBroadcast}
+                />
+                <span className="text-sm text-gray-700">
+                  Включить локальных пользователей без Telegram ID
+                </span>
+              </label>
+            </div>
+          ) : null}
+          */}
 
           {/* Выбор пользователей */}
           <div className="mb-4">
@@ -385,14 +422,14 @@ const Broadcast: React.FC = () => {
               <div className="border border-gray-300 rounded-md p-4 bg-gray-50">
                 <div className="flex items-center justify-between mb-3">
                   <span className="text-sm text-gray-600">
-                    Выбрано: {getSelectedUsersCount()} из {getTotalUsersCount()} пользователей
+                    Выбрано: {getSelectedExternalUsersCount()} из {getTotalExternalUsersCount()} пользователей
                   </span>
                   <div className="space-x-2">
                     <button
                       type="button"
-                      onClick={selectAllUsers}
+                      onClick={() => { selectAllExternalUsers(); }}
                       className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
-                      disabled={usersLoading}
+                      disabled={externalUsersLoading}
                     >
                       Выбрать всех
                     </button>
@@ -400,46 +437,102 @@ const Broadcast: React.FC = () => {
                       type="button"
                       onClick={clearUserSelection}
                       className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
-                      disabled={usersLoading}
+                      disabled={externalUsersLoading}
                     >
                       Очистить
                     </button>
                   </div>
                 </div>
 
-                {usersLoading ? (
+                {externalUsersLoading ? (
                   <div className="text-center py-4">
                     <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mx-auto"></div>
                     <p className="mt-2 text-sm text-gray-600">Загрузка пользователей...</p>
                   </div>
                 ) : (
-                  <div className="max-h-60 overflow-y-auto">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                      {users.map(user => (
-                        <label key={user.id} className="flex items-center p-2 bg-white rounded border hover:bg-blue-50 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={selectedUsers.includes(user.id)}
-                            onChange={() => toggleUserSelection(user.id)}
-                            className="mr-2"
-                            disabled={loading || !!currentBroadcast}
-                          />
-                          <div className="flex-1 min-w-0">
-                            <div className="text-sm font-medium text-gray-900 truncate">
-                              {user.name}
+                  <div className="max-h-60 overflow-y-auto space-y-4">
+                    {/* ЗАКОММЕНТИРОВАНО: Локальные пользователи
+                    {(userSource === 'local' || userSource === 'both') && users.length > 0 && (
+                      <div>
+                        <h4 className="text-sm font-medium text-gray-700 mb-2 flex items-center">
+                          <Users className="w-4 h-4 mr-1" />
+                          Локальные пользователи ({users.length})
+                        </h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                          {users.map(user => (
+                            <label key={user.id} className="flex items-center p-2 bg-white rounded border hover:bg-blue-50 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={selectedUsers.includes(user.id)}
+                                onChange={() => toggleUserSelection(user.id)}
+                                className="mr-2"
+                                disabled={loading || !!currentBroadcast}
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-sm font-medium text-gray-900 truncate">
+                                  {user.name}
+                                </div>
+                                <div className="text-xs text-gray-500">
+                                  ID: {user.id}
+                                  {user.telegram_id && ` • Telegram: ${user.telegram_id}`}
+                                </div>
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    */}
+
+                    {/* Пользователи */}
+                    {externalUsers.length > 0 && (
+                      <div>
+                        <h4 className="text-sm font-medium text-gray-700 mb-2 flex items-center">
+                          <Users className="w-4 h-4 mr-1" />
+                          Пользователи ({externalUsers.length})
+                        </h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                          {externalUsers.map(user => (
+                            <div key={user.telegram_id} className="flex items-center p-2 bg-white rounded border hover:bg-green-50">
+                              <input
+                                type="checkbox"
+                                checked={selectedExternalUsers.includes(user.telegram_id.toString())}
+                                onChange={() => toggleExternalUserSelection(user.telegram_id.toString())}
+                                className="mr-2"
+                                disabled={loading || !!currentBroadcast}
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-sm font-medium text-gray-900 truncate">
+                                  {user.full_name}
+                                </div>
+                                <div className="text-xs text-gray-500">
+                                  Telegram: {user.telegram_id}
+                                  <br />
+                                  {user.faculty} • {user.group}
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  handleViewProfile(user.telegram_id);
+                                }}
+                                className="ml-2 p-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors"
+                                title="Просмотреть профиль"
+                                disabled={loading || !!currentBroadcast}
+                              >
+                                <Eye className="w-4 h-4" />
+                              </button>
                             </div>
-                            <div className="text-xs text-gray-500">
-                              ID: {user.id}
-                              {user.telegram_id && ` • Telegram: ${user.telegram_id}`}
-                            </div>
-                          </div>
-                        </label>
-                      ))}
-                    </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
-                {selectedUsers.length > 0 && (
+                {selectedExternalUsers.length > 0 && (
                   <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded">
                     <p className="text-sm text-blue-800">
                       <strong>Примечание:</strong> Если пользователи не выбраны, рассылка будет отправлена всем доступным пользователям.
@@ -537,7 +630,7 @@ const Broadcast: React.FC = () => {
                     setBroadcastStatus(null);
                     // Очищаем polling при закрытии
                     if (pollingInterval) {
-                      clearInterval(pollingInterval);
+                      window.clearInterval(pollingInterval);
                       setPollingInterval(null);
                     }
                   }}
@@ -743,6 +836,15 @@ const Broadcast: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* User Profile Modal */}
+      {selectedUserProfile && (
+        <UserProfile
+          telegramId={selectedUserProfile}
+          isOpen={isProfileOpen}
+          onClose={handleCloseProfile}
+        />
+      )}
     </div>
   );
 };

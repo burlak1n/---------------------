@@ -352,12 +352,13 @@ async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str, pool: A
         if let Ok(slot_id) = parts[1].parse::<i64>() {
             if let Ok(Some(slot)) = core_logic::db::get_slot(&pool, slot_id).await {
                 if let Some(msg) = &q.message {
-                    let user = match core_logic::db::get_user_by_telegram_id(&pool, q.from.id.0 as i64).await {
+                    let telegram_id = q.from.id.0 as i64;
+                    let user = match core_logic::db::get_user_by_telegram_id(&pool, telegram_id).await {
                         Ok(Some(user)) => user,
                         Ok(None) => {
                             let new_user = CreateUserRequest {
                                 name: q.from.first_name.clone(),
-                                telegram_id: Some(q.from.id.0 as i64),
+                                telegram_id: telegram_id,
                             };
                             match core_logic::db::create_user(&pool, new_user).await {
                                 Ok(user) => user,
@@ -373,7 +374,7 @@ async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str, pool: A
                         }
                     };
 
-                    match core_logic::db::create_or_update_booking(&pool, user.id, Some(slot_id)).await {
+                    match core_logic::db::create_or_update_booking(&pool, telegram_id, Some(slot_id)).await {
                         Ok(_) => {
                             // Конвертируем UTC время в MSK (+3)
                             let msk_time = slot.time + chrono::Duration::hours(3);

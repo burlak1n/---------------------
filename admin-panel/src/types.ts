@@ -14,12 +14,12 @@ export interface User {
 
 export interface Booking {
   slot_id: string;
-  user_id: number;
+  telegram_id: number;
 }
 
 export interface BookingRecord {
   id: number;
-  user_id: number;
+  telegram_id: number;
   slot_id?: number;
   created_at?: string; // ISO string
 }
@@ -37,7 +37,7 @@ export interface CreateUserRequest {
 
 export interface CreateBookingRequest {
   slot_id: string;
-  user_id: number;
+  telegram_id: number;
 }
 
 export interface ApiResponse<T> {
@@ -72,9 +72,8 @@ export interface BroadcastResponse {
 // Event-Driven Broadcast Types
 export interface CreateBroadcastCommand {
   message: string;
-  include_users_without_telegram: boolean;
   message_type?: 'custom' | 'signup';
-  selected_users?: number[]; // ID выбранных пользователей
+  selected_external_users?: string[]; // telegram_id выбранных внешних пользователей
 }
 
 export interface BroadcastCreatedResponse {
@@ -123,16 +122,94 @@ export interface RetryMessageCommand {
 
 // External API Types
 export interface ExternalUser {
-  _id: {
-    $oid: string;
-  };
   telegram_id: number;
-  created_at: string;
-  completed_surveys: string[];
+  full_name: string;
+  faculty: string;
+  group: string;
+  phone: string;
+  completed_at: string;
 }
 
 export interface ExternalUsersResponse {
   users: ExternalUser[];
   total: number;
   last_sync?: string;
+}
+
+// User Survey Types
+export interface UserSurvey {
+  telegram_id: number;
+  full_name: string;
+  faculty: string;
+  group: string;
+  phone: string;
+  email?: string;
+  birth_date?: string;
+  education_level?: string;
+  experience?: string;
+  skills?: string[];
+  interests?: string[];
+  completed_at: string;
+  survey_data?: {
+    q1?: string;
+    q9?: string; // JSON строка с данными рисунка
+    completion_time_seconds?: number;
+    survey_id?: string;
+    username?: string;
+    request_id?: string;
+  };
+}
+
+// Survey Structure Types
+export interface SurveyValidation {
+  pattern?: string | null;
+  min_length?: number | null;
+  max_length?: number | null;
+}
+
+export interface PersonalInfoField {
+  key: string;
+  label: string;
+  required: boolean;
+  field_type: 'text' | 'phone';
+  validation: SurveyValidation;
+}
+
+export interface SurveyQuestion {
+  type: 'Text' | 'Choice' | 'Creative';
+  id: string;
+  number: number;
+  text: string;
+  required: boolean;
+  options?: string[];
+  allow_custom?: boolean;
+  multiple?: boolean;
+  formats?: string[];
+}
+
+export interface SurveyConfig {
+  personal_info: PersonalInfoField[];
+  questions: SurveyQuestion[];
+  timer_seconds: number;
+}
+
+export interface SurveyStructure {
+  _id: string;
+  title: string;
+  version: string;
+  is_active: boolean;
+  created_at: string;
+  config: SurveyConfig;
+}
+
+export interface SurveyStatistics {
+  total_responses: number;
+  completion_rate: number;
+  average_completion_time: number;
+  question_stats: Record<string, {
+    response_count: number;
+    average_rating?: number;
+    top_choices?: string[];
+    completion_rate: number;
+  }>;
 }

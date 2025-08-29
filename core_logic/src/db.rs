@@ -146,10 +146,10 @@ pub async fn get_slot(pool: &SqlitePool, slot_id: i64) -> Result<Option<Slot>, s
     result
 }
 
-pub async fn create_or_update_booking(pool: &SqlitePool, user_id: i64, slot_id: Option<i64>) -> Result<(), BookingError> {
+pub async fn create_or_update_booking(pool: &SqlitePool, telegram_id: i64, slot_id: Option<i64>) -> Result<(), BookingError> {
     // Сначала удаляем существующую запись пользователя
-    sqlx::query("DELETE FROM records WHERE user_id = ?")
-        .bind(user_id)
+    sqlx::query("DELETE FROM records WHERE telegram_id = ?")
+        .bind(telegram_id)
         .execute(pool)
         .await?;
     
@@ -157,10 +157,10 @@ pub async fn create_or_update_booking(pool: &SqlitePool, user_id: i64, slot_id: 
     if let Some(slot_id) = slot_id {
         // Проверяем лимит и создаем запись в одной транзакции
         let result = sqlx::query!(
-            "INSERT INTO records (user_id, slot_id) 
+            "INSERT INTO records (telegram_id, slot_id) 
              SELECT ?, ? 
              WHERE (SELECT COUNT(*) FROM records WHERE slot_id = ?) < (SELECT max_user FROM slots WHERE id = ?)",
-            user_id, slot_id, slot_id, slot_id
+            telegram_id, slot_id, slot_id, slot_id
         )
         .execute(pool)
         .await?;
@@ -211,9 +211,9 @@ pub async fn create_slot(pool: &SqlitePool, payload: CreateSlotRequest) -> Resul
 pub async fn create_booking(pool: &SqlitePool, payload: CreateBookingRequest) -> Result<Booking, BookingError> {
     let slot_id = payload.slot_id.parse::<i64>().unwrap();
 
-    create_or_update_booking(pool, payload.user_id, Some(slot_id)).await?;
+    create_or_update_booking(pool, payload.telegram_id, Some(slot_id)).await?;
 
-    Ok(Booking { slot_id: payload.slot_id, user_id: payload.user_id })
+    Ok(Booking { slot_id: payload.slot_id, telegram_id: payload.telegram_id })
 }
 
 pub async fn get_users(pool: &SqlitePool) -> Result<Vec<User>, sqlx::Error> {
@@ -222,17 +222,13 @@ pub async fn get_users(pool: &SqlitePool) -> Result<Vec<User>, sqlx::Error> {
         .await
 }
 
-pub async fn create_user(pool: &SqlitePool, payload: CreateUserRequest) -> Result<User, sqlx::Error> {
-    let id = sqlx::query!(
-        "INSERT INTO users (name, telegram_id) VALUES (?, ?)",
-        payload.name,
-        payload.telegram_id
-    )
-    .execute(pool)
-    .await?
-    .last_insert_rowid();
-
-    Ok(User { id, name: payload.name, telegram_id: payload.telegram_id })
+pub async fn create_user(_pool: &SqlitePool, payload: CreateUserRequest) -> Result<User, sqlx::Error> {
+    // Просто возвращаем пользователя без сохранения в БД
+    // В будущем можно будет сохранять в кэш или внешнюю систему
+    Ok(User { 
+        telegram_id: payload.telegram_id, 
+        name: payload.name 
+    })
 }
 
 pub async fn get_user_by_telegram_id(pool: &SqlitePool, telegram_id: i64) -> Result<Option<User>, sqlx::Error> {
@@ -245,7 +241,7 @@ pub async fn get_user_by_telegram_id(pool: &SqlitePool, telegram_id: i64) -> Res
 pub async fn get_todays_bookings(pool: &SqlitePool) -> Result<Vec<BookingInfo>, sqlx::Error> {
     let today = Utc::now().date_naive();
     sqlx::query_as::<_, BookingInfo>(
-        "SELECT u.telegram_id, s.time, s.place FROM records r JOIN users u ON r.user_id = u.id JOIN slots s ON r.slot_id = s.id WHERE date(s.time) = date(?)"
+    "SELECT r.telegram_id, s.time, s.place FROM records r JOIN slots s ON r.slot_id = s.id WHERE date(s.time) = date(?)"
     )
     .bind(today.to_string())
     .fetch_all(pool)
@@ -306,40 +302,13 @@ pub async fn update_slot(pool: &SqlitePool, slot_id: i64, payload: UpdateSlotReq
     get_slot(pool, slot_id).await.map(|s| s.unwrap())
 }
 
-pub async fn update_user(pool: &SqlitePool, user_id: i64, payload: UpdateUserRequest) -> Result<User, sqlx::Error> {
-    let mut query = String::from("UPDATE users SET ");
-    let mut conditions = Vec::new();
-    let mut params: Vec<Box<dyn sqlx::Encode<'_, Sqlite> + Send + Sync>> = Vec::new();
-
-    if let Some(name) = payload.name {
-        conditions.push("name = ?");
-        params.push(Box::new(name));
-    }
-
-    if let Some(telegram_id) = payload.telegram_id {
-        conditions.push("telegram_id = ?");
-        params.push(Box::new(telegram_id));
-    }
-
-    if conditions.is_empty() {
-        return sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = ?")
-            .bind(user_id)
-            .fetch_one(pool)
-            .await;
-    }
-
-    query.push_str(&conditions.join(", "));
-    query.push_str(" WHERE id = ?");
-    params.push(Box::new(user_id));
-
-    sqlx::query(&query)
-        .execute(pool)
-        .await?;
-
-    sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = ?")
-        .bind(user_id)
-        .fetch_one(pool)
-        .await
+pub async fn update_user(_pool: &SqlitePool, telegram_id: i64, payload: UpdateUserRequest) -> Result<User, sqlx::Error> {
+    // Пока просто возвращаем пользователя без обновления в БД
+    // В будущем можно будет обновлять в кэше или внешней системе
+    Ok(User { 
+        telegram_id, 
+        name: payload.name.unwrap_or_else(|| format!("User {}", telegram_id))
+    })
 }
 
 pub async fn delete_slot(pool: &SqlitePool, slot_id: i64) -> Result<(), sqlx::Error> {
@@ -358,19 +327,14 @@ pub async fn delete_slot(pool: &SqlitePool, slot_id: i64) -> Result<(), sqlx::Er
     Ok(())
 }
 
-pub async fn delete_user(pool: &SqlitePool, user_id: i64) -> Result<(), sqlx::Error> {
-    // Сначала удаляем все записи пользователя
-    sqlx::query("DELETE FROM records WHERE user_id = ?")
-        .bind(user_id)
+pub async fn delete_user(pool: &SqlitePool, telegram_id: i64) -> Result<(), sqlx::Error> {
+    // Удаляем все записи пользователя
+    sqlx::query("DELETE FROM records WHERE telegram_id = ?")
+        .bind(telegram_id)
         .execute(pool)
         .await?;
 
-    // Затем удаляем самого пользователя
-    sqlx::query("DELETE FROM users WHERE id = ?")
-        .bind(user_id)
-        .execute(pool)
-        .await?;
-
+    // Пользователи больше не хранятся в БД
     Ok(())
 }
 
@@ -383,16 +347,10 @@ pub async fn delete_booking(pool: &SqlitePool, booking_id: i64) -> Result<(), sq
     Ok(())
 }
 
-pub async fn get_users_for_broadcast(pool: &SqlitePool, include_users_without_telegram: bool) -> Result<Vec<User>, sqlx::Error> {
-    if include_users_without_telegram {
-        sqlx::query_as::<_, User>("SELECT * FROM users")
-            .fetch_all(pool)
-            .await
-    } else {
-        sqlx::query_as::<_, User>("SELECT * FROM users WHERE telegram_id IS NOT NULL")
-            .fetch_all(pool)
-            .await
-    }
+pub async fn get_users_for_broadcast(_pool: &SqlitePool, _include_users_without_telegram: bool) -> Result<Vec<User>, sqlx::Error> {
+    // Пока возвращаем пустой список, так как таблица users будет удалена
+    // В будущем можно будет получать пользователей из внешней системы
+    Ok(Vec::new())
 }
 
 // Event Store Functions
@@ -462,7 +420,7 @@ pub async fn get_broadcast_events(
         broadcast_id: row.broadcast_id,
         event_type: row.event_type,
         event_data: row.event_data,
-        created_at: row.created_at.unwrap_or_else(|| chrono::Utc::now().naive_utc()),
+        created_at: row.created_at,
         version: row.version,
     })
     .collect();
@@ -651,14 +609,14 @@ pub async fn get_broadcast_summary(
 
     match record {
         Some(r) => Ok(Some(BroadcastSummary {
-            id: r.id.unwrap_or_default(),
+            id: r.id,
             message: r.message,
             total_users: r.total_users,
-            sent_count: r.sent_count.unwrap_or(0),
-            failed_count: r.failed_count.unwrap_or(0),
-            pending_count: r.pending_count.unwrap_or(0),
-            status: BroadcastStatus::from(r.status.unwrap_or_default()),
-            created_at: r.created_at.unwrap_or_default(),
+            sent_count: r.sent_count,
+            failed_count: r.failed_count,
+            pending_count: r.pending_count,
+            status: BroadcastStatus::from(r.status),
+            created_at: r.created_at,
             started_at: r.started_at,
             completed_at: r.completed_at,
         })),
@@ -691,11 +649,11 @@ pub async fn get_all_broadcast_summaries(
             id: r.id.unwrap_or_default(),
             message: r.message,
             total_users: r.total_users,
-            sent_count: r.sent_count.unwrap_or(0),
-            failed_count: r.failed_count.unwrap_or(0),
-            pending_count: r.pending_count.unwrap_or(0),
-            status: BroadcastStatus::from(r.status.unwrap_or_default()),
-            created_at: r.created_at.unwrap_or_default(),
+            sent_count: r.sent_count,
+            failed_count: r.failed_count,
+            pending_count: r.pending_count,
+            status: BroadcastStatus::from(r.status),
+            created_at: r.created_at,
             started_at: r.started_at,
             completed_at: r.completed_at,
         })
@@ -710,10 +668,9 @@ pub async fn create_broadcast_message(
 ) -> Result<(), sqlx::Error> {
     let status_str = message.status.to_string();
     sqlx::query!(
-        "INSERT INTO broadcast_messages (broadcast_id, user_id, telegram_id, status, error, sent_at, retry_count, created_at) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO broadcast_messages (broadcast_id, telegram_id, status, error, sent_at, retry_count, created_at) 
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
         message.broadcast_id,
-        message.user_id,
         message.telegram_id,
         status_str,
         message.error,
@@ -735,13 +692,13 @@ pub async fn update_broadcast_message(
     sqlx::query!(
         "UPDATE broadcast_messages 
          SET status = ?, error = ?, sent_at = ?, retry_count = ? 
-         WHERE broadcast_id = ? AND user_id = ?",
+         WHERE broadcast_id = ? AND telegram_id = ?",
         status_str,
         message.error,
         message.sent_at,
         message.retry_count,
         message.broadcast_id,
-        message.user_id
+        message.telegram_id
     )
     .execute(pool)
     .await?;
@@ -752,26 +709,26 @@ pub async fn update_broadcast_message(
 pub async fn update_broadcast_message_status(
     pool: &SqlitePool,
     broadcast_id: &str,
-    user_id: &i64,
+    telegram_id: i64,
     status: MessageStatus,
     error: Option<String>,
 ) -> Result<(), sqlx::Error> {
     let status_str = status.to_string();
-    let sent_at = if status == MessageStatus::Sent { 
-        Some(chrono::Utc::now().naive_utc()) 
-    } else { 
-        None 
+    let sent_at = if status == MessageStatus::Sent {
+        Some(chrono::Utc::now().naive_utc())
+    } else {
+        None
     };
-    
+
     sqlx::query!(
         "UPDATE broadcast_messages 
          SET status = ?, error = ?, sent_at = ? 
-         WHERE broadcast_id = ? AND user_id = ?",
+         WHERE broadcast_id = ? AND telegram_id = ?",
         status_str,
         error,
         sent_at,
         broadcast_id,
-        user_id
+        telegram_id
     )
     .execute(pool)
     .await?;
@@ -798,7 +755,7 @@ pub async fn get_broadcast_messages(
         let status_str = status.to_string();
         
         sqlx::query!(
-            "SELECT id, broadcast_id, user_id, telegram_id, status, error, sent_at, retry_count, created_at 
+            "SELECT id, broadcast_id, telegram_id, status, error, sent_at, retry_count, created_at 
              FROM broadcast_messages 
              WHERE broadcast_id = ? AND status = ?
              ORDER BY created_at ASC
@@ -814,19 +771,18 @@ pub async fn get_broadcast_messages(
         .map(|row| BroadcastMessageRecord {
             id: row.id.unwrap_or(0),
             broadcast_id: row.broadcast_id,
-            user_id: row.user_id,
             telegram_id: row.telegram_id,
             status: MessageStatus::from(row.status),
             error: row.error,
             sent_at: row.sent_at,
-            retry_count: row.retry_count.unwrap_or(0),
+            retry_count: row.retry_count,
             message_type: None,
-            created_at: row.created_at.unwrap_or_else(|| chrono::Utc::now().naive_utc()),
+            created_at: row.created_at,
         })
         .collect()
     } else {
         sqlx::query!(
-            "SELECT id, broadcast_id, user_id, telegram_id, status, error, sent_at, retry_count, created_at 
+            "SELECT id, broadcast_id, telegram_id, status, error, sent_at, retry_count, created_at 
              FROM broadcast_messages 
              WHERE broadcast_id = ?
              ORDER BY created_at ASC
@@ -841,14 +797,13 @@ pub async fn get_broadcast_messages(
         .map(|row| BroadcastMessageRecord {
             id: row.id.unwrap_or(0),
             broadcast_id: row.broadcast_id,
-            user_id: row.user_id,
             telegram_id: row.telegram_id,
             status: MessageStatus::from(row.status),
             error: row.error,
             sent_at: row.sent_at,
-            retry_count: row.retry_count.unwrap_or(0),
+            retry_count: row.retry_count,
             message_type: None,
-            created_at: row.created_at.unwrap_or_else(|| chrono::Utc::now().naive_utc()),
+            created_at: row.created_at,
         })
         .collect()
     };
@@ -861,20 +816,32 @@ pub async fn get_broadcast_messages(
 pub async fn handle_create_broadcast(
     pool: &SqlitePool,
     command: CreateBroadcastCommand,
-) -> Result<BroadcastCreatedResponse, Box<dyn std::error::Error>> {
+) -> Result<(BroadcastCreatedResponse, BroadcastEvent), Box<dyn std::error::Error>> {
     let broadcast_id = uuid::Uuid::new_v4().to_string();
     
-    // Получаем пользователей
-    let users = if let Some(selected_user_ids) = &command.selected_users {
-        // Если указаны конкретные пользователи, получаем всех и фильтруем
-        let all_users = get_users_for_broadcast(pool, command.include_users_without_telegram).await?;
-        all_users.into_iter()
-            .filter(|user| selected_user_ids.contains(&user.id))
-            .collect()
+    // Работаем только с внешними пользователями
+    let mut users = Vec::new();
+    
+    // Работаем только с внешними пользователями
+    if let Some(selected_external_user_ids) = &command.selected_external_users {
+        // Внешние пользователи - это telegram_id
+        println!("Внешние пользователи выбраны: {:?}", selected_external_user_ids);
+        
+        // Создаем пользователей только с telegram_id
+        let external_users = selected_external_user_ids.iter().map(|telegram_id| {
+            let user = User {
+                telegram_id: telegram_id.parse::<i64>().unwrap_or(0),
+                name: format!("User {}", telegram_id),
+            };
+            println!("Создан пользователь: telegram_id={}", user.telegram_id);
+            user
+        }).collect::<Vec<_>>();
+        
+        users.extend(external_users);
     } else {
-        // Если пользователи не выбраны, получаем всех подходящих
-        get_users_for_broadcast(pool, command.include_users_without_telegram).await?
-    };
+        println!("ОШИБКА: selected_external_users должен быть указан!");
+        return Err("No external users specified".into());
+    }
     
     // Создаем событие
     let event = BroadcastEvent::BroadcastCreated {
@@ -907,10 +874,10 @@ pub async fn handle_create_broadcast(
     // Записи сообщений будут созданы воркером событий
     // чтобы избежать дублирования
     
-    Ok(BroadcastCreatedResponse {
+    Ok((BroadcastCreatedResponse {
         broadcast_id,
         status: BroadcastStatus::Pending,
-    })
+    }, event))
 }
 
 pub async fn handle_retry_message(
@@ -929,8 +896,7 @@ pub async fn handle_retry_message(
         // Создаем событие повторной попытки
         let event = BroadcastEvent::MessageRetrying {
             broadcast_id: command.broadcast_id,
-            user_id: command.user_id,
-            telegram_id: message.telegram_id.unwrap_or(0),
+            telegram_id: command.telegram_id,
             retry_count: message.retry_count as u32,
             retry_at: chrono::Utc::now(),
         };
