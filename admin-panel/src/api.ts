@@ -199,17 +199,24 @@ export const externalUsersApi = {
   // Получение пользователей с завершенными анкетами
   getCompletedUsers: async (): Promise<ExternalUser[]> => {
     if (externalUsersApi.useLocalMode) {
+      console.log('API: getCompletedUsers в локальном режиме');
       const localData = await externalUsersApi.getActiveManager().loadData();
-      return localData
+      console.log('API: localData первые 2 элемента:', localData.slice(0, 2));
+      
+      const result = localData
         .filter(user => user.telegram_id > 0)
         .map(user => ({
           telegram_id: user.telegram_id,
+          username: user.username,
           full_name: user.full_name,
           faculty: user.faculty,
           group: user.group,
           phone: user.phone,
           completed_at: user.created_at
         }));
+      
+      console.log('API: результат маппинга первые 2 элемента:', result.slice(0, 2));
+      return result;
     }
 
     try {
@@ -263,6 +270,7 @@ export const externalUsersApi = {
 
       return {
         telegram_id: localUser.telegram_id,
+        username: localUser.username,
         full_name: localUser.full_name,
         faculty: localUser.faculty,
         group: localUser.group,
@@ -272,9 +280,15 @@ export const externalUsersApi = {
         education_level: undefined,
         experience: undefined,
         skills: localUser.q2.filter(skill => skill && skill.trim()),
-        interests: [localUser.q3, localUser.q4, localUser.q5, localUser.q6, localUser.q7, localUser.q8, localUser.q9]
-          .filter(interest => interest && interest.trim()),
+        // Не фильтруем, чтобы сохранить позиции (q3..q9)
+        interests: [localUser.q3, localUser.q4, localUser.q5, localUser.q6, localUser.q7, localUser.q8, localUser.q9],
         completed_at: localUser.created_at,
+        // Добавляем прямые поля для вопросов
+        q5: localUser.q5,
+        q6: localUser.q6,
+        q7: localUser.q7,
+        q8: localUser.q8,
+        q9: localUser.q9,
         survey_data: {
           q1: localUser.q1,
           q9: localUser.q9, // Передаем данные рисунка

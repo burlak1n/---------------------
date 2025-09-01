@@ -81,9 +81,14 @@ export class JSONDataManager {
       
       console.log('JSON: Обрабатываем результаты парсинга...');
       console.log('JSON: Первый элемент:', jsonData[0]);
+      console.log('JSON: Первый элемент username:', jsonData[0]?.username);
       console.log('JSON: Всего элементов:', jsonData.length);
       
       this.data = jsonData.map((row: JSONSurveyResponse, index: number) => {
+        // Проверяем username более детально
+        const rawUsername = row.username;
+        const finalUsername = rawUsername && rawUsername.trim() !== '' ? rawUsername : `user_${parseInt(row.telegram_id.$numberLong)}`;
+        
         const parsedUser = {
           _id: row._id.$oid,
           full_name: row.full_name,
@@ -102,7 +107,7 @@ export class JSONDataManager {
           completion_time_seconds: row.completion_time_seconds || 0,
           survey_id: row.survey_id,
           telegram_id: parseInt(row.telegram_id.$numberLong) || 0,
-          username: row.username,
+          username: finalUsername,
           request_id: row.request_id,
           created_at: row.created_at,
         } as ParsedSurveyResponse;
@@ -111,6 +116,9 @@ export class JSONDataManager {
           console.log(`JSON: Обработан пользователь ${index}:`, {
             telegram_id: parsedUser.telegram_id,
             full_name: parsedUser.full_name,
+            username: parsedUser.username,
+            raw_username: rawUsername,
+            final_username: finalUsername,
             raw_telegram_id: row.telegram_id
           });
         }
@@ -146,8 +154,31 @@ export class JSONDataManager {
     return this.surveyStructure;
   }
 
-  getCompletedUsers(): ParsedSurveyResponse[] {
-    return this.data.filter(user => user.telegram_id > 0);
+  getCompletedUsers(): any[] {
+    console.log('JSON: getCompletedUsers начало, всего пользователей в data:', this.data.length);
+    console.log('JSON: getCompletedUsers первые 2 пользователя из data:', this.data.slice(0, 2));
+    
+    const result = this.data.filter(user => user.telegram_id > 0).map(user => {
+      const mappedUser = {
+        telegram_id: user.telegram_id,
+        username: user.username, // username уже обработан в loadData
+        full_name: user.full_name,
+        faculty: user.faculty,
+        group: user.group,
+        phone: user.phone,
+        completed_at: user.created_at
+      };
+      
+      console.log('JSON: Маппинг пользователя:', {
+        original: { telegram_id: user.telegram_id, username: user.username },
+        mapped: { telegram_id: mappedUser.telegram_id, username: mappedUser.username }
+      });
+      
+      return mappedUser;
+    });
+    
+    console.log('JSON: getCompletedUsers результат:', result.slice(0, 2));
+    return result;
   }
 
   getUserSurvey(telegramId: number): ParsedSurveyResponse | null {
@@ -336,8 +367,31 @@ export class DebugDataManager {
     return this.surveyStructure;
   }
 
-  getCompletedUsers(): ParsedSurveyResponse[] {
-    return this.data.filter(user => user.telegram_id > 0);
+  getCompletedUsers(): any[] {
+    console.log('DEBUG: getCompletedUsers начало, всего пользователей в data:', this.data.length);
+    console.log('DEBUG: getCompletedUsers первые 2 пользователя из data:', this.data.slice(0, 2));
+    
+    const result = this.data.filter(user => user.telegram_id > 0).map(user => {
+      const mappedUser = {
+        telegram_id: user.telegram_id,
+        username: user.username, // username уже обработан в loadData
+        full_name: user.full_name,
+        faculty: user.faculty,
+        group: user.group,
+        phone: user.phone,
+        completed_at: user.created_at
+      };
+      
+      console.log('DEBUG: Маппинг пользователя:', {
+        original: { telegram_id: user.telegram_id, username: user.username },
+        mapped: { telegram_id: mappedUser.telegram_id, username: mappedUser.username }
+      });
+      
+      return mappedUser;
+    });
+    
+    console.log('DEBUG: getCompletedUsers результат:', result.slice(0, 2));
+    return result;
   }
 
   getUserSurvey(telegramId: number): ParsedSurveyResponse | null {

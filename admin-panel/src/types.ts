@@ -123,6 +123,7 @@ export interface RetryMessageCommand {
 // External API Types
 export interface ExternalUser {
   telegram_id: number;
+  username: string;
   full_name: string;
   faculty: string;
   group: string;
@@ -139,6 +140,7 @@ export interface ExternalUsersResponse {
 // User Survey Types
 export interface UserSurvey {
   telegram_id: number;
+  username: string;
   full_name: string;
   faculty: string;
   group: string;
@@ -150,6 +152,12 @@ export interface UserSurvey {
   skills?: string[];
   interests?: string[];
   completed_at: string;
+  // Прямые поля для вопросов
+  q5?: string;
+  q6?: string;
+  q7?: string;
+  q8?: string;
+  q9?: string;
   survey_data?: {
     q1?: string;
     q9?: string; // JSON строка с данными рисунка

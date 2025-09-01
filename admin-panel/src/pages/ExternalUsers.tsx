@@ -110,6 +110,7 @@ const ExternalUsers: React.FC = () => {
       }
       
       console.log(`fetchUsers: получено ${data.length} пользователей`);
+      console.log('fetchUsers: первые 2 пользователя:', data.slice(0, 2));
       setUsers(data);
       setLastSync(new Date().toISOString());
     } catch (err: any) {
@@ -147,9 +148,9 @@ const ExternalUsers: React.FC = () => {
 
   const handleExportData = () => {
     const csvContent = [
-      'Telegram ID,Full Name,Faculty,Group,Phone,Completed At',
+      'Full Name,Phone,Username,Faculty,Group,Completed At,Telegram ID',
       ...users.map(user => 
-        `${user.telegram_id},"${user.full_name}","${user.faculty}","${user.group}","${user.phone}","${user.completed_at}"`
+        `"${user.full_name}","${user.phone}",@${user.username},"${user.faculty}","${user.group}","${user.completed_at}",${user.telegram_id}`
       )
     ].join('\n');
 
@@ -184,10 +185,16 @@ const ExternalUsers: React.FC = () => {
       (filterBooking === 'not_booked' && !hasBooking(user.telegram_id));
     
     const matchesName = !searchName || 
-      user.full_name.toLowerCase().includes(searchName.toLowerCase());
+      user.full_name.toLowerCase().includes(searchName.toLowerCase()) ||
+      user.username.toLowerCase().includes(searchName.toLowerCase());
     
     return matchesSurvey && matchesBooking && matchesName;
   });
+
+  // Логируем первые несколько пользователей для отладки
+  if (users.length > 0 && users.length <= 3) {
+    console.log('filteredUsers: все пользователи:', users);
+  }
 
   const uniqueSurveys = Array.from(
     new Set(users.flatMap(user => [user.faculty, user.group]))
@@ -207,7 +214,7 @@ const ExternalUsers: React.FC = () => {
         </div>
         {searchName && (
           <div className="mt-2 text-sm text-blue-600">
-            🔍 Поиск работает в реальном времени
+            🔍 Поиск по ФИО и username работает в реальном времени
           </div>
         )}
       </div>
@@ -231,10 +238,10 @@ const ExternalUsers: React.FC = () => {
             <button
               onClick={handleExportData}
               className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500"
-                              title="Экспорт данных"
+              title="Экспорт данных (CSV)"
             >
               <Download className="mr-2 h-4 w-4" />
-                              Экспорт данных
+              Экспорт данных
             </button>
           )}
           <button
@@ -381,7 +388,7 @@ const ExternalUsers: React.FC = () => {
             <div className="relative">
               <input
                 type="text"
-                placeholder="Поиск по ФИО..."
+                placeholder="Поиск по ФИО или username..."
                 value={searchName}
                 onChange={(e) => setSearchName(e.target.value)}
                 className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-64 pr-10"
@@ -470,53 +477,94 @@ const ExternalUsers: React.FC = () => {
           )}
         </div>
         
+        {/* Заголовки колонок */}
+        <div className="px-6 py-3 bg-gray-50 border-b border-gray-200">
+          <div className="grid grid-cols-12 gap-4 text-xs font-medium text-gray-500 uppercase tracking-wide">
+            <div className="col-span-3">ФИО</div>
+            <div className="col-span-1">Телефон</div>
+            <div className="col-span-2">Username</div>
+            <div className="col-span-4">Факультет / Группа</div>
+            <div className="col-span-1">Статус</div>
+            <div className="col-span-1">Дата</div>
+          </div>
+        </div>
+        
         <div className="divide-y divide-gray-200">
           {filteredUsers.length === 0 ? (
             <div className="px-6 py-8 text-center text-gray-500">
               {users.length === 0 ? 'Нет пользователей' : 
-                searchName ? `Нет пользователей по запросу "${searchName}"` : 
+                searchName ? `Нет пользователей по запросу "${searchName}" (ФИО или username)` : 
                 'Нет пользователей с выбранным фильтром'
               }
             </div>
           ) : (
             filteredUsers.map((user) => (
-              <div key={user.telegram_id} className="px-6 py-4 hover:bg-gray-50">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-4">
-                    <div className="flex items-center text-gray-900">
-                      <Users className="h-5 w-5 mr-2" />
-                      <span className="font-medium">Telegram: {user.telegram_id}</span>
-                    </div>
-                    <div className="flex items-center text-gray-600">
-                      <span>{user.full_name}</span>
-                    </div>
-                    <div className="text-sm text-gray-500">
-                      {user.faculty} • {user.group}
-                    </div>
-                    <div className="text-sm text-gray-500">
+              <div key={user.telegram_id} className="px-6 py-4 hover:bg-gray-50 transition-colors duration-150 border-l-4 border-l-transparent hover:border-l-blue-500">
+                <div className="grid grid-cols-12 gap-4 items-center">
+                  {/* ФИО */}
+                  <div className="col-span-3 flex items-center min-w-0">
+                    <Users className="h-5 w-5 mr-2 text-gray-400 flex-shrink-0" />
+                    <span className="font-medium text-gray-900 truncate">{user.full_name}</span>
+                  </div>
+                  
+                  {/* Телефон */}
+                  <div className="col-span-1 text-sm text-gray-600 font-mono truncate">
+                    <a 
+                      href={`tel:${user.phone}`} 
+                      className="hover:text-blue-600 hover:underline transition-colors"
+                      title="Позвонить"
+                    >
                       {user.phone}
-                    </div>
-                    {/* Индикация записи */}
-                    {hasBooking(user.telegram_id) && (
-                      <div className="flex items-center text-green-600">
+                    </a>
+                  </div>
+                  
+                  {/* Username */}
+                  <div className="col-span-2 text-sm text-blue-600 font-medium truncate">
+                    <a 
+                      href={`https://t.me/${user.username}`} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="hover:text-blue-800 hover:underline transition-colors"
+                      title="Открыть в Telegram"
+                    >
+                      {user.username}
+                    </a>
+                  </div>
+                  
+                  {/* Факультет и группа */}
+                  <div className="col-span-4 text-sm text-gray-500 min-w-0">
+                    <div className="truncate">{user.faculty}</div>
+                    <div className="text-xs text-gray-400">{user.group}</div>
+                  </div>
+                  
+                  {/* Статус записи */}
+                  <div className="col-span-1 text-center">
+                    {hasBooking(user.telegram_id) ? (
+                      <div className="flex items-center justify-center text-green-600">
                         <Calendar className="h-4 w-4 mr-1" />
                         <span className="text-xs font-medium">Записан</span>
                       </div>
+                    ) : (
+                      <div className="text-xs text-gray-400">-</div>
                     )}
                   </div>
-                  <div className="flex items-center space-x-3">
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                      {new Date(user.completed_at).toLocaleDateString()}
-                    </span>
-                    <button
-                      onClick={() => handleViewProfile(user.telegram_id)}
-                      className="inline-flex items-center px-2 py-1 text-xs font-medium text-blue-700 bg-blue-100 rounded hover:bg-blue-200 transition-colors"
-                      title="Просмотреть профиль"
-                    >
-                      <Eye className="w-3 h-3 mr-1" />
-                      Профиль
-                    </button>
+                  
+                  {/* Дата завершения */}
+                  <div className="col-span-1 text-xs text-gray-500 text-center">
+                    {new Date(user.completed_at).toLocaleDateString()}
                   </div>
+                </div>
+                
+                {/* Кнопка профиля под строкой */}
+                <div className="mt-3 flex justify-end">
+                  <button
+                    onClick={() => handleViewProfile(user.telegram_id)}
+                    className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-100 rounded hover:bg-blue-200 transition-colors"
+                    title="Просмотреть профиль"
+                  >
+                    <Eye className="w-3 h-3 mr-1" />
+                    Профиль
+                  </button>
                 </div>
               </div>
             ))
