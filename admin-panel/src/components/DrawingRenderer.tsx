@@ -38,31 +38,17 @@ const DrawingRenderer: React.FC<DrawingRendererProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Собираем все точки штрихов
-    const allPoints: Point[] = [];
-    (drawingData.drawingData || []).forEach(stroke => {
-      (stroke.points || []).forEach(p => allPoints.push(p));
-    });
+    // Очищаем фон
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
 
-    // Собираем прямоугольники текстов (используем приблизительную ширину = 0.6 * fontSize * text.length)
-    type TextBBox = { x: number; y: number; w: number; h: number };
-    const textBBoxes: TextBBox[] = [];
-    (drawingData.textElements || []).forEach(el => {
-      const fontSize: number = el.font ? parseInt(el.font.match(/\d+/)?.[0] || '16') : 16;
-      const text: string = el.text || '';
-      const approxWidth = Math.max(1, Math.floor(0.6 * fontSize * text.length));
-      const approxHeight = fontSize;
-      textBBoxes.push({ x: el.x || 0, y: el.y || 0, w: approxWidth, h: approxHeight });
-    });
-
-    const hasStrokes = allPoints.length > 0;
-    const hasTexts = textBBoxes.length > 0;
+    // Проверяем наличие данных
+    const hasStrokes = drawingData.drawingData && drawingData.drawingData.length > 0;
+    const hasTexts = drawingData.textElements && drawingData.textElements.length > 0;
 
     // Если нет ни штрихов, ни текста — показываем заглушку
     if (!hasStrokes && !hasTexts) {
-      ctx.clearRect(0, 0, width, height);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, width, height);
       ctx.fillStyle = '#9ca3af';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -71,59 +57,54 @@ const DrawingRenderer: React.FC<DrawingRendererProps> = ({
       return;
     }
 
-    // Считаем bbox контента
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-
+    // Собираем все точки для вычисления границ
+    const allPoints: Point[] = [];
     if (hasStrokes) {
-      allPoints.forEach(p => {
-        if (p.x < minX) minX = p.x;
-        if (p.y < minY) minY = p.y;
-        if (p.x > maxX) maxX = p.x;
-        if (p.y > maxY) maxY = p.y;
+      (drawingData.drawingData || []).forEach(stroke => {
+        (stroke.points || []).forEach(p => allPoints.push(p));
       });
     }
 
+    // Добавляем позиции текстов к границам
     if (hasTexts) {
-      textBBoxes.forEach(b => {
-        if (b.x < minX) minX = b.x;
-        if (b.y < minY) minY = b.y;
-        if (b.x + b.w > maxX) maxX = b.x + b.w;
-        if (b.y + b.h > maxY) maxY = b.y + b.h;
+      (drawingData.textElements || []).forEach(el => {
+        const fontSize: number = el.font ? parseInt(el.font.match(/\d+/)?.[0] || '16') : 16;
+        const text: string = el.text || '';
+        const approxWidth = Math.max(1, Math.floor(0.8 * fontSize * text.length));
+        allPoints.push({ x: el.x || 0, y: el.y || 0 });
+        allPoints.push({ x: (el.x || 0) + approxWidth, y: (el.y || 0) + fontSize });
       });
     }
 
-    // Если bbox невалиден, принудительно задаём минимальные границы
-    if (!isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY)) {
-      minX = 0; minY = 0; maxX = width; maxY = height;
+    // Вычисляем границы
+    let minX = 0, minY = 0, maxX = width, maxY = height;
+    
+    if (allPoints.length > 0) {
+      minX = Math.min(...allPoints.map(p => p.x));
+      minY = Math.min(...allPoints.map(p => p.y));
+      maxX = Math.max(...allPoints.map(p => p.x));
+      maxY = Math.max(...allPoints.map(p => p.y));
     }
 
     const contentW = Math.max(1, maxX - minX);
     const contentH = Math.max(1, maxY - minY);
 
-    // Добавляем поля по краям (5%)
-    const padding = 0.05;
-    const targetW = width * (1 - 2 * padding);
-    const targetH = height * (1 - 2 * padding);
-
-    const scaleX = targetW / contentW;
-    const scaleY = targetH / contentH;
+    // Вычисляем масштаб с учетом отступов
+    const padding = 20;
+    const scaleX = (width - 2 * padding) / contentW;
+    const scaleY = (height - 2 * padding) / contentH;
     const scale = Math.min(scaleX, scaleY);
 
     // Смещение для центрирования
     const offsetX = (width - contentW * scale) / 2 - minX * scale;
     const offsetY = (height - contentH * scale) / 2 - minY * scale;
 
-    // Очищаем фон
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, width, height);
-
     // Рисуем штрихи с трансформацией
     if (hasStrokes) {
       (drawingData.drawingData || []).forEach(stroke => {
         if (!stroke.points || stroke.points.length < 2) return;
-        ctx.strokeStyle = stroke.color;
-        ctx.lineWidth = Math.max(1, stroke.width * scale);
+        ctx.strokeStyle = stroke.color || '#000000';
+        ctx.lineWidth = Math.max(1, (stroke.width || 2) * scale);
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
 
@@ -138,21 +119,48 @@ const DrawingRenderer: React.FC<DrawingRendererProps> = ({
       });
     }
 
-    // Рисуем текстовые элементы с трансформацией
+    // Рисуем текстовые элементы с трансформацией (избегаем наложения)
     if (hasTexts) {
-      (drawingData.textElements || []).forEach(el => {
-        const fontSize: number = el.font ? parseInt(el.font.match(/\d+/)?.[0] || '16') : 16;
-        const fontFamily: string = el.font ? (el.font.match(/[a-zA-Z\s]+/)?.[0]?.trim() || 'Arial') : 'Arial';
-        const scaledFont = Math.max(10, Math.floor(fontSize * scale));
+      const placedRects: Array<{x:number;y:number;w:number;h:number}> = [];
+      (drawingData.textElements || []).forEach((el) => {
+        // Парсим размер и шрифт типа "16px Arial"
+        const rawFont = typeof el.font === 'string' ? el.font : '16px Arial';
+        const sizeMatch = rawFont.match(/(\d+)px/);
+        const familyMatch = rawFont.replace(/\d+px\s*/, '').trim();
+        const fontSize: number = sizeMatch ? parseInt(sizeMatch[1], 10) : 16;
+        const fontFamily: string = familyMatch || 'Arial';
 
+        // Масштабируем размер шрифта пропорционально, но не ниже порога читаемости
+        const scaledFont = Math.max(12, Math.min(28, Math.floor(fontSize * scale)));
         ctx.font = `${scaledFont}px ${fontFamily}`;
         ctx.fillStyle = el.color || '#000000';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'top';
 
         const x = (el.x || 0) * scale + offsetX;
-        const y = (el.y || 0) * scale + offsetY;
-        ctx.fillText(el.text || '', x, y);
+        let y = (el.y || 0) * scale + offsetY;
+
+        // Рассчитываем ширину текста
+        const text = el.text || '';
+        const textWidth = ctx.measureText(text).width;
+
+        // Избегаем пересечения с ранее размещенными текстами
+        const h = scaledFont; // высота строки ~ размеру шрифта
+        const intersects = (r1: {x:number;y:number;w:number;h:number}, r2: {x:number;y:number;w:number;h:number}) => (
+          r1.x < r2.x + r2.w && r1.x + r1.w > r2.x && r1.y < r2.y + r2.h && r1.y + r1.h > r2.y
+        );
+        let candidate = { x, y, w: textWidth, h };
+        let safety = 0;
+        while (placedRects.some(r => intersects(candidate, r)) && safety < 50) {
+          // Сдвигаем вниз на 10% высоты шрифта до устранения пересечения
+          y += Math.max(1, Math.floor(h * 0.1));
+          candidate = { x, y, w: textWidth, h };
+          safety++;
+        }
+        placedRects.push(candidate);
+
+        // Рисуем как есть, без автопереносов, чтобы сохранить исходную раскладку
+        ctx.fillText(text, x, y);
       });
     }
   }, [drawingData, width, height]);

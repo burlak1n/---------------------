@@ -136,6 +136,9 @@ const SurveyDisplay: React.FC<SurveyDisplayProps> = ({ survey }) => {
                       }
                       const raw: any = survey.q9 as any;
                       const drawingData = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                      console.log('Drawing data for user', survey.full_name, ':', drawingData);
+                      console.log('Text elements:', drawingData?.textElements);
+                      console.log('Drawing strokes:', drawingData?.drawingData?.length);
                       return (
                         <DrawingRenderer
                           drawingData={drawingData}
