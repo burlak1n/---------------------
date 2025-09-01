@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Users, RefreshCw, AlertCircle, CheckCircle, Clock, Download, Filter, Eye, Calendar, FileText } from 'lucide-react';
+import { Users, RefreshCw, AlertCircle, CheckCircle, Clock, Download, Filter, Eye, Calendar, FileText, Search } from 'lucide-react';
 import { externalUsersApi } from '../api';
 import type { ExternalUser, BookingRecord } from '../types';
 import UserProfile from '../components/UserProfile';
@@ -15,7 +15,9 @@ const ExternalUsers: React.FC = () => {
   const [useCache, setUseCache] = useState(true);
   const [filterSurvey, setFilterSurvey] = useState<string>('');
   const [filterBooking, setFilterBooking] = useState<string>('all');
-  const [useCSVMode, setUseCSVMode] = useState(false);
+  const [searchName, setSearchName] = useState<string>('');
+  const [useLocalMode, setUseLocalMode] = useState(false);
+  const [localMode, setLocalMode] = useState<'json' | 'debug'>('json');
   
   // Состояние для профиля пользователя
   const [selectedUserProfile, setSelectedUserProfile] = useState<number | null>(null);
@@ -33,7 +35,7 @@ const ExternalUsers: React.FC = () => {
     fetchBookings();
     // Загружаем статистику анкеты в любом режиме
     loadSurveyStats();
-  }, [useCSVMode]);
+  }, [useLocalMode, localMode]);
 
   const loadSurveyStats = async () => {
     try {
@@ -50,10 +52,10 @@ const ExternalUsers: React.FC = () => {
     setApiHealth(isHealthy);
   };
 
-  const handleToggleCSVMode = (useCSV: boolean) => {
-    console.log(`Переключаем CSV режим на: ${useCSV}`);
-    setUseCSVMode(useCSV);
-    externalUsersApi.toggleCSVMode(useCSV);
+  const handleToggleLocalMode = (useLocal: boolean) => {
+    console.log(`Переключаем локальный режим на: ${useLocal}, режим: ${localMode}`);
+    setUseLocalMode(useLocal);
+    externalUsersApi.toggleLocalMode(useLocal, localMode);
     // Очищаем данные при переключении режима
     setUsers([]);
     setError(null);
@@ -69,15 +71,36 @@ const ExternalUsers: React.FC = () => {
     }, 100);
   };
 
+  const handleLocalModeChange = (mode: 'json' | 'debug') => {
+    console.log(`Переключаем локальный режим данных на: ${mode}`);
+    setLocalMode(mode);
+    if (useLocalMode) {
+      externalUsersApi.toggleLocalMode(true, mode);
+      // Очищаем данные при переключении режима
+      setUsers([]);
+      setError(null);
+      setLastSync(null);
+      setSurveyStats(null);
+      // Загружаем данные в новом режиме
+      setTimeout(() => {
+        console.log('Загружаем данные в новом режиме...');
+        checkApiHealth();
+        fetchUsers();
+        fetchBookings();
+        loadSurveyStats();
+      }, 100);
+    }
+  };
+
   const fetchUsers = async () => {
     try {
-      console.log(`fetchUsers: начало загрузки, CSV режим: ${useCSVMode}`);
+      console.log(`fetchUsers: начало загрузки, локальный режим: ${useLocalMode}`);
       setLoading(true);
       setError(null);
       
       let data;
-      if (useCSVMode) {
-        console.log('fetchUsers: загружаем данные в CSV режиме');
+      if (useLocalMode) {
+        console.log('fetchUsers: загружаем данные в локальный режиме');
         data = await externalUsersApi.getCompletedUsers();
       } else {
         console.log('fetchUsers: загружаем данные в API режиме');
@@ -111,12 +134,18 @@ const ExternalUsers: React.FC = () => {
     await Promise.all([fetchUsers(), fetchBookings()]);
   };
 
+  const clearAllFilters = () => {
+    setSearchName('');
+    setFilterSurvey('');
+    setFilterBooking('all');
+  };
+
   // Проверяем, есть ли запись у пользователя
   const hasBooking = (telegramId: number): boolean => {
     return bookings.some(booking => booking.telegram_id === telegramId);
   };
 
-  const handleExportCSV = () => {
+  const handleExportData = () => {
     const csvContent = [
       'Telegram ID,Full Name,Faculty,Group,Phone,Completed At',
       ...users.map(user => 
@@ -154,7 +183,10 @@ const ExternalUsers: React.FC = () => {
       (filterBooking === 'booked' && hasBooking(user.telegram_id)) ||
       (filterBooking === 'not_booked' && !hasBooking(user.telegram_id));
     
-    return matchesSurvey && matchesBooking;
+    const matchesName = !searchName || 
+      user.full_name.toLowerCase().includes(searchName.toLowerCase());
+    
+    return matchesSurvey && matchesBooking && matchesName;
   });
 
   const uniqueSurveys = Array.from(
@@ -167,12 +199,17 @@ const ExternalUsers: React.FC = () => {
         <div className="text-center">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
           <div className="text-gray-500">
-            {useCSVMode 
-              ? 'Загрузка пользователей из CSV файла...' 
+            {useLocalMode 
+              ? 'Загрузка пользователей из локального файла...' 
               : 'Загрузка пользователей из внешнего API...'
             }
           </div>
         </div>
+        {searchName && (
+          <div className="mt-2 text-sm text-blue-600">
+            🔍 Поиск работает в реальном времени
+          </div>
+        )}
       </div>
     );
   }
@@ -183,21 +220,21 @@ const ExternalUsers: React.FC = () => {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Пользователи</h1>
           <p className="text-gray-600">
-            {useCSVMode 
-              ? 'Пользователи с завершенными анкетами из локального CSV файла' 
+            {useLocalMode 
+              ? 'Пользователи с завершенными анкетами из локального локального файла' 
               : 'Пользователи с завершенными анкетами из внешнего API'
             }
           </p>
         </div>
         <div className="flex items-center space-x-3">
-          {useCSVMode && (
+          {useLocalMode && (
             <button
-              onClick={handleExportCSV}
+              onClick={handleExportData}
               className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500"
-              title="Экспорт данных из CSV"
+                              title="Экспорт данных"
             >
               <Download className="mr-2 h-4 w-4" />
-              Экспорт CSV
+                              Экспорт данных
             </button>
           )}
           <button
@@ -224,7 +261,7 @@ const ExternalUsers: React.FC = () => {
           <div className="flex items-center space-x-2 mb-3">
             <FileText className="h-5 w-5 text-purple-600" />
             <h3 className="text-lg font-medium text-purple-900">
-              Статистика анкеты {useCSVMode ? '(CSV режим)' : '(API режим)'}
+              Статистика анкеты {useLocalMode ? `(${localMode === 'json' ? 'JSON файл' : 'Debug данные'})` : '(API режим)'}
             </h3>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -265,8 +302,8 @@ const ExternalUsers: React.FC = () => {
             <Clock className="h-5 w-5 text-yellow-500" />
           )}
           <span className="text-sm text-gray-600">
-            {useCSVMode 
-              ? 'CSV режим активен - работаем с локальными данными' 
+            {useLocalMode 
+              ? 'локальный режим активен - работаем с локальными данными' 
               : apiHealth === true 
                 ? 'Внешний API доступен' 
                 : apiHealth === false 
@@ -291,7 +328,7 @@ const ExternalUsers: React.FC = () => {
               checked={useCache}
               onChange={(e) => setUseCache(e.target.checked)}
               className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              disabled={useCSVMode}
+              disabled={useLocalMode}
             />
             <span className="text-sm text-gray-700">Использовать кэш (5 минут)</span>
           </label>
@@ -299,16 +336,39 @@ const ExternalUsers: React.FC = () => {
           <label className="flex items-center space-x-2">
             <input
               type="checkbox"
-              checked={useCSVMode}
-              onChange={(e) => handleToggleCSVMode(e.target.checked)}
+              checked={useLocalMode}
+              onChange={(e) => handleToggleLocalMode(e.target.checked)}
               className="rounded border-gray-300 text-green-600 focus:ring-green-500"
             />
-            <span className="text-sm text-gray-700">Режим CSV (локальные данные)</span>
+            <span className="text-sm text-gray-700">Локальный режим (JSON/Debug данные)</span>
           </label>
+          
+          {useLocalMode && (
+            <div className="mt-2 flex items-center space-x-4">
+              <label className="flex items-center space-x-2">
+                <input
+                  type="radio"
+                  checked={localMode === 'json'}
+                  onChange={() => handleLocalModeChange('json')}
+                  className="text-blue-600 focus:ring-blue-500"
+                />
+                <span className="text-sm text-gray-700">JSON файл</span>
+              </label>
+              <label className="flex items-center space-x-2">
+                <input
+                  type="radio"
+                  checked={localMode === 'debug'}
+                  onChange={() => handleLocalModeChange('debug')}
+                  className="text-blue-600 focus:ring-blue-500"
+                />
+                <span className="text-sm text-gray-700">Debug данные</span>
+              </label>
+            </div>
+          )}
         </div>
-        {useCSVMode && (
+        {useLocalMode && (
           <div className="mt-2 text-sm text-green-600">
-            ✓ Работаем с локальным CSV файлом shaforms.responses.csv
+            ✓ Работаем с {localMode === 'json' ? 'локальным JSON файлом shaforms.responses.json' : 'тестовыми debug данными'}
           </div>
         )}
       </div>
@@ -316,6 +376,27 @@ const ExternalUsers: React.FC = () => {
       {/* Filter */}
       <div className="mb-6">
         <div className="flex items-center space-x-4">
+          <div className="flex items-center space-x-2">
+            <Search className="h-4 w-4 text-gray-500" />
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="Поиск по ФИО..."
+                value={searchName}
+                onChange={(e) => setSearchName(e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-64 pr-10"
+              />
+              {searchName && (
+                <button
+                  onClick={() => setSearchName('')}
+                  className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  title="Очистить поиск"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          </div>
           <div className="flex items-center space-x-2">
             <Filter className="h-4 w-4 text-gray-500" />
             <select
@@ -341,6 +422,15 @@ const ExternalUsers: React.FC = () => {
               <option value="not_booked">Только не записанные</option>
             </select>
           </div>
+          {(searchName || filterSurvey || filterBooking !== 'all') && (
+            <button
+              onClick={clearAllFilters}
+              className="px-3 py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+              title="Очистить все фильтры"
+            >
+              Очистить фильтры
+            </button>
+          )}
         </div>
       </div>
 
@@ -359,18 +449,23 @@ const ExternalUsers: React.FC = () => {
         <div className="px-6 py-4 border-b border-gray-200">
           <div className="flex justify-between items-center">
             <h2 className="text-lg font-medium text-gray-900">
-              {useCSVMode 
-                ? 'Пользователи из CSV файла' 
+              {useLocalMode 
+                ? `Пользователи из ${localMode === 'json' ? 'JSON файла' : 'debug данных'}` 
                 : 'Пользователи с завершенными анкетами'
               }
             </h2>
             <span className="text-sm text-gray-500">
               {filteredUsers.length} из {users.length}
+              {searchName && (
+                <span className="ml-2 text-blue-600">
+                  • Поиск: "{searchName}"
+                </span>
+              )}
             </span>
           </div>
-          {useCSVMode && (
+          {useLocalMode && (
             <div className="text-xs text-green-600 mt-1">
-              📁 Источник: shaforms.responses.csv
+              📁 Источник: {localMode === 'json' ? 'shaforms.responses.json' : 'debug данные'}
             </div>
           )}
         </div>
@@ -378,7 +473,10 @@ const ExternalUsers: React.FC = () => {
         <div className="divide-y divide-gray-200">
           {filteredUsers.length === 0 ? (
             <div className="px-6 py-8 text-center text-gray-500">
-              {users.length === 0 ? 'Нет пользователей' : 'Нет пользователей с выбранным фильтром'}
+              {users.length === 0 ? 'Нет пользователей' : 
+                searchName ? `Нет пользователей по запросу "${searchName}"` : 
+                'Нет пользователей с выбранным фильтром'
+              }
             </div>
           ) : (
             filteredUsers.map((user) => (
@@ -447,10 +545,10 @@ const ExternalUsers: React.FC = () => {
           </div>
           <div className="bg-white p-4 rounded-lg shadow">
             <div className="text-sm font-medium text-gray-500">
-              {useCSVMode ? 'С telegram_id' : 'Записанных на собеседование'}
+              {useLocalMode ? 'С telegram_id' : 'Записанных на собеседование'}
             </div>
             <div className="text-2xl font-bold text-green-600">
-              {useCSVMode 
+              {useLocalMode 
                 ? users.filter(user => user.telegram_id > 0).length
                 : users.filter(user => hasBooking(user.telegram_id)).length
               }

@@ -23,7 +23,7 @@ import type {
   SurveyStructure,
   SurveyStatistics,
 } from './types';
-import { CSVDataManager, type ParsedSurveyResponse } from './utils/csvUtils';
+import { JSONDataManager, DebugDataManager, type ParsedSurveyResponse } from './utils/jsonUtils';
 
 const api = axios.create({
   baseURL: 'http://localhost:3000',
@@ -179,17 +179,28 @@ export const broadcastApi = {
 
 // External Users API
 export const externalUsersApi = {
-  // Флаг для переключения между внешним API и CSV режимом
-  useCSVMode: false,
+  // Флаг для переключения между внешним API и локальным режимом
+  useLocalMode: false,
+  // Режим локальных данных: 'json' или 'debug'
+  localMode: 'json' as 'json' | 'debug',
   
-  // CSV менеджер для работы с локальными данными
-  csvManager: CSVDataManager.getInstance(),
+  // Менеджеры для работы с локальными данными
+  jsonManager: JSONDataManager.getInstance(),
+  debugManager: DebugDataManager.getInstance(),
+
+  // Вспомогательная функция для получения активного менеджера
+  getActiveManager() {
+    if (externalUsersApi.localMode === 'debug') {
+      return externalUsersApi.debugManager;
+    }
+    return externalUsersApi.jsonManager;
+  },
 
   // Получение пользователей с завершенными анкетами
   getCompletedUsers: async (): Promise<ExternalUser[]> => {
-    if (externalUsersApi.useCSVMode) {
-      const csvData = await externalUsersApi.csvManager.loadData();
-      return csvData
+    if (externalUsersApi.useLocalMode) {
+      const localData = await externalUsersApi.getActiveManager().loadData();
+      return localData
         .filter(user => user.telegram_id > 0)
         .map(user => ({
           telegram_id: user.telegram_id,
@@ -212,7 +223,7 @@ export const externalUsersApi = {
 
   // Получение пользователей с кэшированием
   getCompletedUsersCached: async (): Promise<ExternalUser[]> => {
-    if (externalUsersApi.useCSVMode) {
+    if (externalUsersApi.useLocalMode) {
       return await externalUsersApi.getCompletedUsers();
     }
 
@@ -242,35 +253,35 @@ export const externalUsersApi = {
 
   // Получение анкеты пользователя
   getUserSurvey: async (telegramId: number): Promise<UserSurvey> => {
-    if (externalUsersApi.useCSVMode) {
-      // Убеждаемся, что CSV данные загружены
-      await externalUsersApi.csvManager.loadData();
-      const csvUser = externalUsersApi.csvManager.getUserSurvey(telegramId);
-      if (!csvUser) {
+    if (externalUsersApi.useLocalMode) {
+      // Убеждаемся, что локальные данные загружены
+      await externalUsersApi.getActiveManager().loadData();
+      const localUser = externalUsersApi.getActiveManager().getUserSurvey(telegramId);
+      if (!localUser) {
         throw new Error('Пользователь не найден');
       }
 
       return {
-        telegram_id: csvUser.telegram_id,
-        full_name: csvUser.full_name,
-        faculty: csvUser.faculty,
-        group: csvUser.group,
-        phone: csvUser.phone,
+        telegram_id: localUser.telegram_id,
+        full_name: localUser.full_name,
+        faculty: localUser.faculty,
+        group: localUser.group,
+        phone: localUser.phone,
         email: undefined,
         birth_date: undefined,
         education_level: undefined,
         experience: undefined,
-        skills: csvUser.q2.filter(skill => skill && skill.trim()),
-        interests: [csvUser.q3, csvUser.q4, csvUser.q5, csvUser.q6, csvUser.q7, csvUser.q8, csvUser.q9]
+        skills: localUser.q2.filter(skill => skill && skill.trim()),
+        interests: [localUser.q3, localUser.q4, localUser.q5, localUser.q6, localUser.q7, localUser.q8, localUser.q9]
           .filter(interest => interest && interest.trim()),
-        completed_at: csvUser.created_at,
+        completed_at: localUser.created_at,
         survey_data: {
-          q1: csvUser.q1,
-          q9: csvUser.q9, // Передаем данные рисунка
-          completion_time_seconds: csvUser.completion_time_seconds,
-          survey_id: csvUser.survey_id,
-          username: csvUser.username,
-          request_id: csvUser.request_id
+          q1: localUser.q1,
+          q9: localUser.q9, // Передаем данные рисунка
+          completion_time_seconds: localUser.completion_time_seconds,
+          survey_id: localUser.survey_id,
+          username: localUser.username,
+          request_id: localUser.request_id
         }
       };
     }
@@ -296,30 +307,35 @@ export const externalUsersApi = {
   },
 
   // Переключение режима работы
-  toggleCSVMode: (useCSV: boolean) => {
-    externalUsersApi.useCSVMode = useCSV;
-    if (useCSV) {
-      externalUsersApi.csvManager.clearCache();
+  toggleLocalMode: (useLocal: boolean, mode: 'json' | 'debug' = 'json') => {
+    externalUsersApi.useLocalMode = useLocal;
+    externalUsersApi.localMode = mode;
+    if (useLocal) {
+      if (mode === 'json') {
+        externalUsersApi.getActiveManager().clearCache();
+      } else {
+        externalUsersApi.debugManager.clearCache();
+      }
     }
   },
 
-  // Получение статистики CSV данных
-  getCSVStats: async () => {
-    if (!externalUsersApi.useCSVMode) {
-      throw new Error('CSV режим не включен');
+  // Получение статистики локальных данных
+  getLocalStats: async () => {
+    if (!externalUsersApi.useLocalMode) {
+      throw new Error('Локальный режим не включен');
     }
-    await externalUsersApi.csvManager.loadData();
-    return externalUsersApi.csvManager.getStats();
+    await externalUsersApi.getActiveManager().loadData();
+    return externalUsersApi.getActiveManager().getStats();
   },
 
   // Получение структуры активной анкеты
   getActiveSurvey: async (): Promise<SurveyStructure> => {
-    if (externalUsersApi.useCSVMode) {
-      const csvStructure = await externalUsersApi.csvManager.loadSurveyStructure();
-      if (!csvStructure) {
-        throw new Error('Структура анкеты не найдена в CSV режиме');
+    if (externalUsersApi.useLocalMode) {
+      const localStructure = await externalUsersApi.getActiveManager().loadSurveyStructure();
+      if (!localStructure) {
+        throw new Error('Структура анкеты не найдена в локальный режиме');
       }
-      return csvStructure;
+      return localStructure;
     }
 
     try {
@@ -333,28 +349,28 @@ export const externalUsersApi = {
 
   // Получение статистики анкеты
   getSurveyStatistics: async (): Promise<SurveyStatistics> => {
-    if (externalUsersApi.useCSVMode) {
-      // Убеждаемся, что CSV данные загружены
-      const csvData = await externalUsersApi.csvManager.loadData();
-      const questionStats = externalUsersApi.csvManager.getQuestionStats();
+    if (externalUsersApi.useLocalMode) {
+      // Убеждаемся, что локальные данные загружены
+      const localData = await externalUsersApi.getActiveManager().loadData();
+      const localQuestionStats = externalUsersApi.getActiveManager().getQuestionStats();
       
-      if (!questionStats) {
-        throw new Error('Статистика недоступна в CSV режиме');
+      if (!localQuestionStats) {
+        throw new Error('Статистика недоступна в локальный режиме');
       }
 
       // Вычисляем общую статистику
-      const totalResponses = csvData.length;
-      const completedResponses = csvData.filter(user => user.telegram_id > 0).length;
+      const totalResponses = localData.length;
+      const completedResponses = localData.filter(user => user.telegram_id > 0).length;
       const completionRate = totalResponses > 0 ? completedResponses / totalResponses : 0;
       
       // Среднее время заполнения
-      const avgTime = csvData.reduce((sum, user) => sum + user.completion_time_seconds, 0) / totalResponses;
+      const avgTime = localData.reduce((sum, user) => sum + user.completion_time_seconds, 0) / totalResponses;
 
       return {
         total_responses: totalResponses,
         completion_rate: completionRate,
         average_completion_time: avgTime,
-        question_stats: questionStats
+        question_stats: localQuestionStats
       };
     }
 
@@ -369,8 +385,8 @@ export const externalUsersApi = {
 
   // Очистка кэша
   clearCache: (): void => {
-    if (externalUsersApi.useCSVMode) {
-      externalUsersApi.csvManager.clearCache();
+    if (externalUsersApi.useLocalMode) {
+      externalUsersApi.getActiveManager().clearCache();
     } else {
       localStorage.removeItem('external_users_cache');
     }
@@ -378,9 +394,9 @@ export const externalUsersApi = {
 
   // Проверка доступности внешнего API
   checkHealth: async (): Promise<boolean> => {
-    if (externalUsersApi.useCSVMode) {
+    if (externalUsersApi.useLocalMode) {
       try {
-        await externalUsersApi.csvManager.loadData();
+        await externalUsersApi.getActiveManager().loadData();
         return true;
       } catch {
         return false;
