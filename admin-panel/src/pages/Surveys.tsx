@@ -8,6 +8,7 @@ import SurveyCardStack from '../components/SurveyCardStack';
 interface SurveyWithRating extends UserSurvey {
   isLiked?: boolean;
   isDisliked?: boolean;
+  comment?: string;
 }
 
 const Surveys: React.FC = () => {
@@ -51,7 +52,7 @@ const Surveys: React.FC = () => {
             ...user,
             isLiked: false,
             isDisliked: false,
-            survey_data: null,
+            survey_data: undefined,
             skills: [],
             interests: [],
             q5: '',
@@ -111,22 +112,32 @@ const Surveys: React.FC = () => {
     setFilteredSurveys(filtered);
   };
 
-  const handleRating = (surveyId: number, isLiked: boolean) => {
+  const handleRating = (surveyId: number, isLiked: boolean, comment?: string) => {
     setSurveys(prev => prev.map(survey => {
       if (survey.telegram_id === surveyId) {
         return {
           ...survey,
           isLiked: isLiked,
-          isDisliked: !isLiked
+          isDisliked: !isLiked,
+          comment: comment || ''
         };
       }
       return survey;
     }));
   };
 
-  const handleSkip = (surveyId: number) => {
-    // Пропускаем анкету без оценки
-    console.log(`Пропущена анкета: ${surveyId}`);
+  const handleSkip = (surveyId: number, comment?: string) => {
+    // Пропускаем анкету без оценки, но сохраняем комментарий
+    setSurveys(prev => prev.map(survey => {
+      if (survey.telegram_id === surveyId) {
+        return {
+          ...survey,
+          comment: comment || ''
+        };
+      }
+      return survey;
+    }));
+    console.log(`Пропущена анкета: ${surveyId}${comment ? ` с комментарием: ${comment}` : ''}`);
   };
 
   const openSurvey = (survey: SurveyWithRating) => {
@@ -269,6 +280,11 @@ const Surveys: React.FC = () => {
                           </span>
                         )}
                       </div>
+                      {survey.comment && (
+                        <div className="text-sm text-blue-700 mt-2 p-2 bg-blue-50 rounded border-l-4 border-blue-300">
+                          <span className="font-medium">Комментарий:</span> {survey.comment}
+                        </div>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 ml-4">
                       <button
@@ -279,7 +295,7 @@ const Surveys: React.FC = () => {
                         <Eye className="h-5 w-5" />
                       </button>
                       <button
-                        onClick={() => handleRating(survey.telegram_id, true)}
+                        onClick={() => handleRating(survey.telegram_id, true, '')}
                         className={`p-2 rounded-md transition-colors ${
                           survey.isLiked
                             ? 'text-red-600 bg-red-50'
@@ -290,7 +306,7 @@ const Surveys: React.FC = () => {
                         <Heart className="h-5 w-5" />
                       </button>
                       <button
-                        onClick={() => handleRating(survey.telegram_id, false)}
+                        onClick={() => handleRating(survey.telegram_id, false, '')}
                         className={`p-2 rounded-md transition-colors ${
                           survey.isDisliked
                             ? 'text-gray-600 bg-gray-50'
@@ -328,7 +344,7 @@ const Surveys: React.FC = () => {
               </h2>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => handleRating(selectedSurvey.telegram_id, true)}
+                  onClick={() => handleRating(selectedSurvey.telegram_id, true, '')}
                   className={`p-2 rounded-md transition-colors ${
                     selectedSurvey.isLiked
                       ? 'text-red-600 bg-red-50'
@@ -339,7 +355,7 @@ const Surveys: React.FC = () => {
                   <Heart className="h-5 w-5" />
                 </button>
                 <button
-                  onClick={() => handleRating(selectedSurvey.telegram_id, false)}
+                  onClick={() => handleRating(selectedSurvey.telegram_id, false, '')}
                   className={`p-2 rounded-md transition-colors ${
                     selectedSurvey.isDisliked
                       ? 'text-gray-600 bg-gray-50'
