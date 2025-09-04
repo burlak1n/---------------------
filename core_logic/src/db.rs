@@ -1,6 +1,9 @@
 use sqlx::{SqlitePool, Sqlite, migrate::MigrateDatabase};
 use chrono::Utc;
 use std::env;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use std::collections::HashMap;
 use crate::{
     Slot, User, Record, Booking, CreateSlotRequest, CreateUserRequest, CreateBookingRequest,
     UpdateSlotRequest, UpdateUserRequest, BookingError, BookingInfo,
@@ -8,6 +11,10 @@ use crate::{
     BroadcastEvent, BroadcastEventRecord, BroadcastSummary, BroadcastStatus, BroadcastMessageRecord, MessageStatus, BroadcastMessageType,
     CreateBroadcastCommand, BroadcastCreatedResponse, RetryMessageCommand, CancelBroadcastCommand,
     GetBroadcastStatusQuery, GetBroadcastMessagesQuery, BroadcastStatusResponse,
+    // Voting system imports
+    Vote, CreateVoteRequest, SurveyVoteSummary, SurveyStatus, NextSurveyResponse, VoteResponse, UserSurvey,
+    // Auth imports
+    TelegramAuth, ExternalUserResponse, AuthResponse,
 };
 
 // Константы для магических чисел
@@ -21,6 +28,67 @@ const SLOT_RANKING_FREE_SLOTS_WEIGHT: f64 = 0.5;
 const SLOT_RANKING_TIME_WEIGHT: f64 = 0.5;
 const SLOT_RANKING_TIME_SCALE: f64 = 100.0;
 const SLOT_RANKING_HALF_LIFE_HOURS: f64 = 48.0;
+
+// Кеш для внешнего API
+#[derive(Clone)]
+pub struct ApiCache {
+    users: Arc<RwLock<Option<(Vec<serde_json::Value>, chrono::DateTime<chrono::Utc>)>>>,
+    surveys: Arc<RwLock<HashMap<i64, (serde_json::Value, chrono::DateTime<chrono::Utc>)>>>,
+}
+
+impl ApiCache {
+    pub fn new() -> Self {
+        Self {
+            users: Arc::new(RwLock::new(None)),
+            surveys: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+    
+    // Кеш пользователей (5 минут)
+    pub async fn get_users(&self) -> Option<Vec<serde_json::Value>> {
+        let cache = self.users.read().await;
+        if let Some((users, timestamp)) = cache.as_ref() {
+            if Utc::now().signed_duration_since(*timestamp).num_minutes() < 5 {
+                return Some(users.clone());
+            }
+        }
+        None
+    }
+    
+    pub async fn set_users(&self, users: Vec<serde_json::Value>) {
+        let mut cache = self.users.write().await;
+        *cache = Some((users, Utc::now()));
+    }
+    
+    // Кеш анкет (10 минут)
+    pub async fn get_survey(&self, telegram_id: i64) -> Option<serde_json::Value> {
+        let cache = self.surveys.read().await;
+        if let Some((survey, timestamp)) = cache.get(&telegram_id) {
+            if Utc::now().signed_duration_since(*timestamp).num_minutes() < 10 {
+                return Some(survey.clone());
+            }
+        }
+        None
+    }
+    
+    pub async fn set_survey(&self, telegram_id: i64, survey: serde_json::Value) {
+        let mut cache = self.surveys.write().await;
+        cache.insert(telegram_id, (survey, Utc::now()));
+    }
+}
+
+// Глобальный кеш
+static mut API_CACHE: Option<ApiCache> = None;
+static INIT: std::sync::Once = std::sync::Once::new();
+
+fn get_cache() -> &'static ApiCache {
+    unsafe {
+        INIT.call_once(|| {
+            API_CACHE = Some(ApiCache::new());
+        });
+        API_CACHE.as_ref().unwrap()
+    }
+}
 
 pub async fn init_db() -> Result<SqlitePool, anyhow::Error> {
     let db_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
@@ -216,18 +284,90 @@ pub async fn create_booking(pool: &SqlitePool, payload: CreateBookingRequest) ->
     Ok(Booking { slot_id: payload.slot_id, telegram_id: payload.telegram_id })
 }
 
-pub async fn get_users(pool: &SqlitePool) -> Result<Vec<User>, sqlx::Error> {
-    sqlx::query_as::<_, User>("SELECT * FROM users")
+pub async fn get_users(pool: &SqlitePool) -> Result<Vec<i64>, sqlx::Error> {
+    let rows = sqlx::query!(
+        "SELECT telegram_id FROM user_roles WHERE role = 1"
+    )
+    .fetch_all(pool)
+    .await?;
+    
+    Ok(rows.into_iter().filter_map(|row| row.telegram_id).collect())
+}
+
+/// Получает все голоса для статистики
+pub async fn get_all_votes(pool: &SqlitePool) -> Result<Vec<Vote>, sqlx::Error> {
+    sqlx::query_as::<_, Vote>("SELECT * FROM votes ORDER BY created_at DESC")
         .fetch_all(pool)
         .await
 }
 
-pub async fn create_user(_pool: &SqlitePool, payload: CreateUserRequest) -> Result<User, sqlx::Error> {
-    // Просто возвращаем пользователя без сохранения в БД
-    // В будущем можно будет сохранять в кэш или внешнюю систему
+/// Получает анкету пользователя с внешнего API (с кешированием)
+pub async fn get_user_survey_from_external_api(telegram_id: i64) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
+    let cache = get_cache();
+    
+    // Проверяем кеш
+    if let Some(survey) = cache.get_survey(telegram_id).await {
+        return Ok(Some(survey));
+    }
+    
+    // Загружаем с API
+    let url = format!("https://ingroupsts.ru/api/users/{}/survey", telegram_id);
+    let response = reqwest::get(&url).await?;
+    
+    if response.status().is_success() {
+        let survey_data: serde_json::Value = response.json().await?;
+        // Логируем часть ответа
+        println!("🔍 Внешний API survey для {}: {:?}", telegram_id, survey_data);
+        // Сохраняем в кеш
+        cache.set_survey(telegram_id, survey_data.clone()).await;
+        Ok(Some(survey_data))
+    } else {
+        println!("❌ Внешний API survey для {} вернул статус: {}", telegram_id, response.status());
+        Ok(None)
+    }
+}
+
+/// Получает список всех пользователей с внешнего API (с кешированием)
+pub async fn get_all_users_from_external_api() -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
+    let cache = get_cache();
+    
+    // Проверяем кеш
+    if let Some(users) = cache.get_users().await {
+        return Ok(users);
+    }
+    
+    // Загружаем с API
+    let response = reqwest::get("https://ingroupsts.ru/api/users/completed").await?;
+    
+    if response.status().is_success() {
+        let users: Vec<serde_json::Value> = response.json().await?;
+        // Логируем часть ответа
+        println!("👥 Внешний API users/completed: получено {} пользователей", users.len());
+        if !users.is_empty() {
+            println!("🔍 Первый пользователь: {:?}", users[0]);
+        }
+        // Сохраняем в кеш
+        cache.set_users(users.clone()).await;
+        Ok(users)
+    } else {
+        println!("❌ Внешний API users/completed вернул статус: {}", response.status());
+        Ok(vec![])
+    }
+}
+
+pub async fn create_user(pool: &SqlitePool, payload: CreateUserRequest) -> Result<User, sqlx::Error> {
+    // Создаем пользователя с ролью 1 в таблице user_roles
+    sqlx::query!(
+        "INSERT OR REPLACE INTO user_roles (telegram_id, role, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+        payload.telegram_id,
+        payload.role
+    )
+    .execute(pool)
+    .await?;
+    
     Ok(User { 
         telegram_id: payload.telegram_id, 
-        name: payload.name 
+        name: payload.role.to_string()
     })
 }
 
@@ -302,12 +442,19 @@ pub async fn update_slot(pool: &SqlitePool, slot_id: i64, payload: UpdateSlotReq
     get_slot(pool, slot_id).await.map(|s| s.unwrap())
 }
 
-pub async fn update_user(_pool: &SqlitePool, telegram_id: i64, payload: UpdateUserRequest) -> Result<User, sqlx::Error> {
-    // Пока просто возвращаем пользователя без обновления в БД
-    // В будущем можно будет обновлять в кэше или внешней системе
+pub async fn update_user(pool: &SqlitePool, telegram_id: i64, payload: UpdateUserRequest) -> Result<User, sqlx::Error> {
+    // Обновляем роль пользователя в таблице user_roles
+    sqlx::query!(
+        "INSERT OR REPLACE INTO user_roles (telegram_id, role, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+        telegram_id,
+        payload.role
+    )
+    .execute(pool)
+    .await?;
+    
     Ok(User { 
         telegram_id, 
-        name: payload.name.unwrap_or_else(|| format!("User {}", telegram_id))
+        name: payload.role.to_string()
     })
 }
 
@@ -328,13 +475,18 @@ pub async fn delete_slot(pool: &SqlitePool, slot_id: i64) -> Result<(), sqlx::Er
 }
 
 pub async fn delete_user(pool: &SqlitePool, telegram_id: i64) -> Result<(), sqlx::Error> {
+    // Удаляем пользователя из таблицы user_roles (убираем из ответственных)
+    sqlx::query("DELETE FROM user_roles WHERE telegram_id = ?")
+        .bind(telegram_id)
+        .execute(pool)
+        .await?;
+
     // Удаляем все записи пользователя
     sqlx::query("DELETE FROM records WHERE telegram_id = ?")
         .bind(telegram_id)
         .execute(pool)
         .await?;
 
-    // Пользователи больше не хранятся в БД
     Ok(())
 }
 
@@ -416,7 +568,7 @@ pub async fn get_broadcast_events(
     .await?
     .into_iter()
     .map(|row| BroadcastEventRecord {
-        event_id: row.event_id,
+        event_id: row.event_id.unwrap_or_default(),
         broadcast_id: row.broadcast_id,
         event_type: row.event_type,
         event_data: row.event_data,
@@ -609,7 +761,7 @@ pub async fn get_broadcast_summary(
 
     match record {
         Some(r) => Ok(Some(BroadcastSummary {
-            id: r.id,
+            id: r.id.unwrap_or_default(),
             message: r.message,
             total_users: r.total_users,
             sent_count: r.sent_count,
@@ -987,4 +1139,531 @@ pub async fn delete_broadcast(
     .await?;
 
     Ok(())
+}
+
+// Voting System Functions
+
+/// Получает роль пользователя
+pub async fn get_user_role(pool: &SqlitePool, telegram_id: i64) -> Result<Option<i32>, sqlx::Error> {
+    let result = sqlx::query!(
+        "SELECT role FROM user_roles WHERE telegram_id = ?",
+        telegram_id
+    )
+    .fetch_optional(pool)
+    .await?;
+    
+    Ok(result.map(|r| r.role as i32))
+}
+
+/// Создает или обновляет роль пользователя
+pub async fn set_user_role(pool: &SqlitePool, telegram_id: i64, role: i32) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "INSERT OR REPLACE INTO user_roles (telegram_id, role, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+        telegram_id,
+        role
+    )
+    .execute(pool)
+    .await?;
+    
+    Ok(())
+}
+
+
+/// Получает следующую анкету для обычного пользователя
+pub async fn get_next_survey_for_regular_user(pool: &SqlitePool, voter_telegram_id: i64) -> Result<Option<i64>, sqlx::Error> {
+    let result = sqlx::query!(
+        r#"
+        SELECT s.survey_id
+        FROM (
+            SELECT DISTINCT survey_id, created_at FROM votes 
+            ORDER BY created_at ASC
+        ) s
+        WHERE s.survey_id NOT IN (
+            SELECT survey_id FROM votes WHERE voter_telegram_id = ?
+        )
+        AND (
+            SELECT COUNT(*) FROM votes v 
+            WHERE v.survey_id = s.survey_id
+        ) < 5
+        AND NOT EXISTS (
+            SELECT 1 FROM votes v 
+            JOIN user_roles ur ON v.voter_telegram_id = ur.telegram_id
+            WHERE v.survey_id = s.survey_id AND ur.role = 1
+        )
+        ORDER BY s.created_at ASC
+        LIMIT 1
+        "#,
+        voter_telegram_id
+    )
+    .fetch_optional(pool)
+    .await?;
+    
+    Ok(result.map(|r| r.survey_id))
+}
+
+/// Получает следующую анкету для ответственного пользователя (атомарный захват)
+pub async fn get_next_survey_for_responsible_user(pool: &SqlitePool, voter_telegram_id: i64) -> Result<Option<i64>, sqlx::Error> {
+    // Сначала находим анкету, готовую для проверки
+    let survey_id = sqlx::query!(
+        r#"
+        SELECT s.survey_id
+        FROM (
+            SELECT DISTINCT survey_id, created_at FROM votes 
+            ORDER BY created_at ASC
+        ) s
+        WHERE (
+            SELECT COUNT(*) FROM votes v 
+            WHERE v.survey_id = s.survey_id
+        ) >= 5
+        AND NOT EXISTS (
+            SELECT 1 FROM votes v 
+            JOIN user_roles ur ON v.voter_telegram_id = ur.telegram_id
+            WHERE v.survey_id = s.survey_id AND ur.role = 1
+        )
+        ORDER BY s.created_at ASC
+        LIMIT 1
+        "#
+    )
+    .fetch_optional(pool)
+    .await?;
+    
+    if let Some(survey) = survey_id {
+        // Атомарно захватываем анкету
+        let result = sqlx::query!(
+            "INSERT INTO votes (survey_id, voter_telegram_id, decision, comment) VALUES (?, ?, 0, 'В обработке')",
+            survey.survey_id,
+            voter_telegram_id
+        )
+        .execute(pool)
+        .await;
+        
+        match result {
+            Ok(_) => Ok(Some(survey.survey_id)),
+            Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => {
+                // Другой ответственный уже захватил эту анкету
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+/// Создает голос
+pub async fn create_vote(pool: &SqlitePool, request: CreateVoteRequest, voter_telegram_id: i64) -> Result<Vote, sqlx::Error> {
+    let result = sqlx::query!(
+        "INSERT INTO votes (survey_id, voter_telegram_id, decision, comment) VALUES (?, ?, ?, ?)",
+        request.survey_id,
+        voter_telegram_id,
+        request.decision,
+        request.comment
+    )
+    .execute(pool)
+    .await?;
+    
+    let vote = sqlx::query_as::<_, Vote>(
+        "SELECT id, survey_id, voter_telegram_id, decision, comment, created_at FROM votes WHERE id = ?"
+    )
+    .bind(result.last_insert_rowid())
+    .fetch_one(pool)
+    .await?;
+    
+    Ok(vote)
+}
+
+/// Получает статистику голосов для анкеты
+pub async fn get_survey_vote_summary(pool: &SqlitePool, survey_id: i64) -> Result<SurveyVoteSummary, sqlx::Error> {
+    // Получаем общую статистику голосов
+    let stats = sqlx::query!(
+        r#"
+        SELECT 
+            decision,
+            COUNT(*) as "count: i64"
+        FROM votes 
+        WHERE survey_id = ?
+        GROUP BY decision
+        "#,
+        survey_id
+    )
+    .fetch_all(pool)
+    .await?;
+    
+    let mut approve_votes = 0;
+    let mut reject_votes = 0;
+    
+    for stat in stats {
+        if stat.decision == 1 {
+            approve_votes = stat.count.unwrap_or(0);
+        } else {
+            reject_votes = stat.count.unwrap_or(0);
+        }
+    }
+    
+    let total_votes = approve_votes + reject_votes;
+    
+    // Проверяем, есть ли голос от ответственного
+    let has_responsible_vote = sqlx::query!(
+        r#"
+        SELECT 1 as "exists: i32" FROM votes v 
+        JOIN user_roles ur ON v.voter_telegram_id = ur.telegram_id
+        WHERE v.survey_id = ? AND ur.role = 1
+        "#,
+        survey_id
+    )
+    .fetch_optional(pool)
+    .await?
+    .is_some();
+    
+    // Определяем статус
+    let status = if has_responsible_vote {
+        SurveyStatus::Completed
+    } else if total_votes >= 5 {
+        SurveyStatus::ReadyForReview
+    } else {
+        SurveyStatus::InProgress
+    };
+    
+    Ok(SurveyVoteSummary {
+        survey_id,
+        total_votes,
+        approve_votes,
+        reject_votes,
+        status,
+        has_responsible_vote,
+    })
+}
+
+/// Получает данные анкеты пользователя с внешнего API
+pub async fn get_user_survey_data(_pool: &SqlitePool, survey_id: i64) -> Result<Option<UserSurvey>, sqlx::Error> {
+    // Получаем URL внешнего API из переменных окружения
+    let api_base_url = std::env::var("EXTERNAL_API_URL")
+        .unwrap_or_else(|_| "https://api.example.com".to_string());
+    
+    let survey_url = format!("{}/api/users/{}/survey", api_base_url, survey_id);
+    
+    // Делаем запрос к внешнему API
+    match reqwest::get(&survey_url).await {
+        Ok(response) => {
+            if response.status().is_success() {
+                match response.json::<UserSurvey>().await {
+                    Ok(survey_data) => Ok(Some(survey_data)),
+                    Err(e) => {
+                        eprintln!("Ошибка парсинга JSON анкеты {}: {}", survey_id, e);
+                        Ok(None)
+                    }
+                }
+            } else {
+                eprintln!("Ошибка получения анкеты {}: HTTP {}", survey_id, response.status());
+                Ok(None)
+            }
+        }
+        Err(e) => {
+            eprintln!("Ошибка запроса к внешнему API для анкеты {}: {}", survey_id, e);
+            Ok(None)
+        }
+    }
+}
+
+/// Получает список пользователей с внешнего API и сохраняет их в базе данных
+pub async fn sync_users_from_external_api(pool: &SqlitePool) -> Result<Vec<i64>, Box<dyn std::error::Error>> {
+    let api_base_url = std::env::var("EXTERNAL_API_URL")
+        .unwrap_or_else(|_| "https://api.example.com".to_string());
+    
+    let users_url = format!("{}/api/users/completed", api_base_url);
+    
+    // Делаем запрос к внешнему API для получения списка пользователей
+    let response = reqwest::get(&users_url).await?;
+    
+    if !response.status().is_success() {
+        return Err(format!("Ошибка получения пользователей: HTTP {}", response.status()).into());
+    }
+    
+    let users: Vec<serde_json::Value> = response.json().await?;
+    let mut synced_user_ids = Vec::new();
+    
+    for user in users {
+        if let Some(telegram_id) = user.get("telegram_id").and_then(|v| v.as_i64()) {
+            // Проверяем, есть ли уже голос за этого пользователя
+            let existing_vote = sqlx::query!(
+                "SELECT 1 as \"exists: i32\" FROM votes WHERE survey_id = ? LIMIT 1",
+                telegram_id
+            )
+            .fetch_optional(pool)
+            .await?;
+            
+            // Если голоса еще нет, создаем запись-заглушку для инициализации
+            if existing_vote.is_none() {
+                // Создаем временную запись для инициализации анкеты
+                let _ = sqlx::query!(
+                    "INSERT OR IGNORE INTO votes (survey_id, voter_telegram_id, decision, comment) VALUES (?, 0, -1, 'Инициализация')",
+                    telegram_id
+                )
+                .execute(pool)
+                .await;
+                
+                synced_user_ids.push(telegram_id);
+            }
+        }
+    }
+    
+    Ok(synced_user_ids)
+}
+
+/// Получает следующую анкету для голосования
+pub async fn get_next_survey(pool: &SqlitePool, voter_telegram_id: i64) -> Result<NextSurveyResponse, sqlx::Error> {
+    println!("🎯 get_next_survey вызван для пользователя: {}", voter_telegram_id);
+    
+    // Получаем роль пользователя
+    let user_role = get_user_role(pool, voter_telegram_id).await?.unwrap_or(0);
+    println!("👤 Роль пользователя {}: {}", voter_telegram_id, user_role);
+    
+    // Получаем всех пользователей с внешнего API
+    println!("🌐 Запрашиваем пользователей с внешнего API...");
+    let all_users = match get_all_users_from_external_api().await {
+        Ok(users) => {
+            println!("✅ Получено {} пользователей с внешнего API", users.len());
+            users
+        },
+        Err(e) => {
+            println!("❌ Ошибка получения пользователей с внешнего API: {}", e);
+            tracing::error!("Ошибка получения пользователей с внешнего API: {}", e);
+            return Ok(NextSurveyResponse {
+                survey_id: None,
+                survey_data: None,
+                vote_summary: None,
+                user_role,
+            });
+        }
+    };
+    
+    // Получаем голоса пользователя из БД
+    println!("🗳️ Получаем голоса пользователя из БД...");
+    let user_votes = sqlx::query!(
+        "SELECT survey_id FROM votes WHERE voter_telegram_id = ?",
+        voter_telegram_id
+    )
+    .fetch_all(pool)
+    .await?;
+    
+    let voted_survey_ids: std::collections::HashSet<i64> = user_votes
+        .into_iter()
+        .map(|v| v.survey_id)
+        .collect();
+    
+    println!("🗳️ Пользователь уже проголосовал за {} анкет", voted_survey_ids.len());
+    
+    let next_survey_id = if user_role == 1 {
+        // Ответственный пользователь - ищем анкеты с >= 5 голосами, но без голоса ответственного
+        println!("🔍 Ищем анкету для ответственного пользователя");
+        find_survey_for_responsible_user(pool, &all_users, &voted_survey_ids).await?
+    } else {
+        // Обычный пользователь - ищем анкеты с приоритизацией (ближе к 5 голосам)
+        println!("🔍 Ищем анкету для обычного пользователя");
+        find_survey_for_regular_user(pool, &all_users, &voted_survey_ids).await?
+    };
+    
+    println!("📋 Найденная анкета: {:?}", next_survey_id);
+    
+    if let Some(survey_id) = next_survey_id {
+        println!("📋 Получаем данные анкеты {} с внешнего API...", survey_id);
+        // Получаем анкету с внешнего API
+        let survey_data = match get_user_survey_from_external_api(survey_id).await {
+            Ok(data) => {
+                println!("✅ Получены данные анкеты с внешнего API");
+                data
+            },
+            Err(e) => {
+                println!("❌ Ошибка получения анкеты с внешнего API: {}", e);
+                tracing::error!("Ошибка получения анкеты с внешнего API: {}", e);
+                None
+            }
+        };
+        
+        println!("📊 Получаем сводку голосов для анкеты {}...", survey_id);
+        // Получаем сводку голосов
+        let vote_summary = get_survey_vote_summary(pool, survey_id).await?;
+        println!("✅ Получена сводка голосов: {} голосов", vote_summary.total_votes);
+        
+        Ok(NextSurveyResponse {
+            survey_id: Some(survey_id),
+            survey_data: survey_data.and_then(|data| {
+                serde_json::from_value::<UserSurvey>(data).ok()
+            }),
+            vote_summary: Some(vote_summary),
+            user_role,
+        })
+    } else {
+        println!("❌ Анкета не найдена, возвращаем null");
+        Ok(NextSurveyResponse {
+            survey_id: None,
+            survey_data: None,
+            vote_summary: None,
+            user_role,
+        })
+    }
+}
+
+/// Находит анкету для обычного пользователя с приоритизацией
+async fn find_survey_for_regular_user(
+    pool: &SqlitePool,
+    all_users: &[serde_json::Value],
+    voted_survey_ids: &std::collections::HashSet<i64>,
+) -> Result<Option<i64>, sqlx::Error> {
+    println!("🔍 find_survey_for_regular_user: {} пользователей, {} уже проголосовано", 
+             all_users.len(), voted_survey_ids.len());
+    
+    // Создаем список кандидатов с количеством голосов
+    let mut candidates = Vec::new();
+    
+    for user in all_users {
+        if let Some(telegram_id) = user.get("telegram_id").and_then(|v| v.as_i64()) {
+            if !voted_survey_ids.contains(&telegram_id) {
+                // Получаем количество голосов за эту анкету
+                let vote_count = sqlx::query!(
+                    "SELECT COUNT(*) as count FROM votes WHERE survey_id = ?",
+                    telegram_id
+                )
+                .fetch_one(pool)
+                .await?;
+                
+                candidates.push((telegram_id, vote_count.count));
+            }
+        }
+    }
+    
+    // Сортируем по приоритету: ближе к 5 голосам = выше приоритет
+    candidates.sort_by(|a, b| {
+        let distance_a = (5 - a.1).abs();
+        let distance_b = (5 - b.1).abs();
+        distance_a.cmp(&distance_b)
+    });
+    
+    // Возвращаем пользователя с наивысшим приоритетом
+    let result = candidates.first().map(|(telegram_id, _)| *telegram_id);
+    println!("🎯 find_survey_for_regular_user: найдено {} кандидатов, выбран: {:?}", 
+             candidates.len(), result);
+    Ok(result)
+}
+
+/// Находит анкету для ответственного пользователя
+async fn find_survey_for_responsible_user(
+    pool: &SqlitePool,
+    all_users: &[serde_json::Value],
+    _voted_survey_ids: &std::collections::HashSet<i64>,
+) -> Result<Option<i64>, sqlx::Error> {
+    println!("🔍 find_survey_for_responsible_user: проверяем {} пользователей", all_users.len());
+    
+    for user in all_users {
+        if let Some(telegram_id) = user.get("telegram_id").and_then(|v| v.as_i64()) {
+            // Проверяем, есть ли >= 5 голосов за эту анкету
+            let vote_count = sqlx::query!(
+                "SELECT COUNT(*) as count FROM votes WHERE survey_id = ?",
+                telegram_id
+            )
+            .fetch_one(pool)
+            .await?;
+            
+            if vote_count.count >= 5 {
+                // Проверяем, есть ли уже голос от ответственного
+                let has_responsible_vote = sqlx::query!(
+                    r#"
+                    SELECT 1 as "exists: i32" FROM votes v 
+                    JOIN user_roles ur ON v.voter_telegram_id = ur.telegram_id
+                    WHERE v.survey_id = ? AND ur.role = 1
+                    "#,
+                    telegram_id
+                )
+                .fetch_optional(pool)
+                .await?
+                .is_some();
+                
+                if !has_responsible_vote {
+                    println!("✅ find_survey_for_responsible_user: найдена анкета {} с {} голосами", 
+                             telegram_id, vote_count.count);
+                    return Ok(Some(telegram_id));
+                }
+            }
+        }
+    }
+    println!("❌ find_survey_for_responsible_user: не найдено подходящих анкет");
+    Ok(None)
+}
+
+/// Обрабатывает голосование
+pub async fn handle_vote(pool: &SqlitePool, request: CreateVoteRequest, voter_telegram_id: i64) -> Result<VoteResponse, sqlx::Error> {
+    // Создаем голос
+    let _vote = create_vote(pool, request.clone(), voter_telegram_id).await?;
+    
+    // Получаем следующую анкету
+    let next_survey = get_next_survey(pool, voter_telegram_id).await?;
+    
+    Ok(VoteResponse {
+        success: true,
+        message: "Голос успешно сохранен".to_string(),
+        next_survey: Some(next_survey),
+    })
+}
+
+// Authentication Functions
+
+/// Проверяет авторизацию через Telegram и получает профиль пользователя
+pub async fn authenticate_user(telegram_auth: TelegramAuth) -> Result<AuthResponse, String> {
+    // TODO: Добавить проверку подписи Telegram (hash verification)
+    // Пока что просто проверяем, что данные пришли
+    
+    let api_base_url = std::env::var("EXTERNAL_API_URL")
+        .unwrap_or_else(|_| "https://api.ingroupsts.ru".to_string());
+    
+    let user_url = format!("{}/user/{}", api_base_url, telegram_auth.id);
+    
+    // Делаем запрос к внешнему API для получения профиля пользователя
+    match reqwest::get(&user_url).await {
+        Ok(response) => {
+            if response.status().is_success() {
+                match response.json::<ExternalUserResponse>().await {
+                    Ok(user_data) => {
+                        // Пользователь найден в системе
+                        Ok(AuthResponse {
+                            success: true,
+                            message: "Авторизация успешна".to_string(),
+                            user_profile: Some(user_data.user_profile),
+                            user_role: None, // Будет получена из БД
+                        })
+                    }
+                    Err(e) => {
+                        eprintln!("Ошибка парсинга профиля пользователя {}: {}", telegram_auth.id, e);
+                        Ok(AuthResponse {
+                            success: false,
+                            message: "Ошибка получения данных пользователя".to_string(),
+                            user_profile: None,
+                            user_role: None,
+                        })
+                    }
+                }
+            } else {
+                // Пользователь не найден в системе
+                Ok(AuthResponse {
+                    success: false,
+                    message: "Пользователь не найден в системе".to_string(),
+                    user_profile: None,
+                    user_role: None,
+                })
+            }
+        }
+        Err(e) => {
+            eprintln!("Ошибка запроса к внешнему API для пользователя {}: {}", telegram_auth.id, e);
+            Ok(AuthResponse {
+                success: false,
+                message: "Ошибка подключения к серверу".to_string(),
+                user_profile: None,
+                user_role: None,
+            })
+        }
+    }
+}
+
+/// Получает роль пользователя из базы данных
+pub async fn get_user_role_from_db(pool: &SqlitePool, telegram_id: i64) -> Result<Option<i32>, sqlx::Error> {
+    get_user_role(pool, telegram_id).await
 }

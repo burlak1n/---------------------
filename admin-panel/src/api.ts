@@ -26,7 +26,7 @@ import type {
 import { JSONDataManager, DebugDataManager, type ParsedSurveyResponse } from './utils/jsonUtils';
 
 const api = axios.create({
-  baseURL: 'http://localhost:3000',
+  baseURL: 'http://localhost.local:3000',
   headers: {
     'Content-Type': 'application/json',
   },
@@ -96,20 +96,20 @@ export const slotsApi = {
 
 // Users API
 export const usersApi = {
-  getAll: async (): Promise<User[]> => {
-    const response = await api.get<User[]>('/users');
+  getAll: async (): Promise<number[]> => {
+    const response = await api.get<number[]>('/user_roles');
     return response.data;
   },
   create: async (user: CreateUserRequest): Promise<User> => {
-    const response = await api.post<User>('/users', user);
+    const response = await api.post<User>('/user_roles', user);
     return response.data;
   },
-  update: async (id: number, user: UpdateUserRequest): Promise<User> => {
-    const response = await api.put<User>(`/users/${id}`, user);
+  update: async (telegramId: number, user: UpdateUserRequest): Promise<User> => {
+    const response = await api.put<User>(`/user_roles/${telegramId}`, user);
     return response.data;
   },
-  delete: async (id: number): Promise<void> => {
-    await api.delete(`/users/${id}`);
+  delete: async (telegramId: number): Promise<void> => {
+    await api.delete(`/user_roles/${telegramId}`);
   },
 };
 

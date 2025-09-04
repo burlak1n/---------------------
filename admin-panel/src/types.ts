@@ -7,9 +7,11 @@ export interface Slot {
 }
 
 export interface User {
-  id: number;
-  name: string;
-  telegram_id?: number;
+  telegram_id: number;
+  role: number;
+  created_at?: string;
+  full_name?: string;
+  username?: string;
 }
 
 export interface Booking {
@@ -31,8 +33,8 @@ export interface CreateSlotRequest {
 }
 
 export interface CreateUserRequest {
-  name: string;
-  telegram_id?: number;
+  telegram_id: number;
+  role: number;
 }
 
 export interface CreateBookingRequest {
@@ -52,8 +54,7 @@ export interface UpdateSlotRequest {
 }
 
 export interface UpdateUserRequest {
-  name?: string;
-  telegram_id?: number;
+  role: number;
 }
 
 export interface BroadcastRequest {
@@ -220,4 +221,88 @@ export interface SurveyStatistics {
     top_choices?: string[];
     completion_rate: number;
   }>;
+}
+
+// Voting System Types
+export interface Vote {
+  id: number;
+  survey_id: number;                    // Telegram ID владельца анкеты
+  voter_telegram_id: number;            // Telegram ID голосующего
+  decision: number;                     // 1 - approve, 0 - reject
+  comment?: string;
+  created_at: string;
+}
+
+export interface UserRole {
+  telegram_id: number;
+  role: number;                         // 0 - обычный, 1 - ответственный
+  created_at: string;
+}
+
+export interface CreateVoteRequest {
+  survey_id: number;                    // Telegram ID владельца анкеты
+  decision: number;                     // 1 - approve, 0 - reject
+  comment?: string;
+}
+
+export interface SurveyVoteSummary {
+  survey_id: number;                    // Telegram ID владельца анкеты
+  total_votes: number;
+  approve_votes: number;
+  reject_votes: number;
+  status: SurveyStatus;
+  has_responsible_vote: boolean;        // Есть ли голос от ответственного
+}
+
+export type SurveyStatus = 'InProgress' | 'ReadyForReview' | 'Completed';
+
+export interface NextSurveyResponse {
+  survey_id?: number;
+  survey_data?: UserSurvey;
+  vote_summary?: SurveyVoteSummary;
+  user_role: number;                    // 0 - обычный, 1 - ответственный
+}
+
+export interface VoteResponse {
+  success: boolean;
+  message: string;
+  next_survey?: NextSurveyResponse;
+}
+
+// Authentication Types
+export interface TelegramAuth {
+  id: number;
+  first_name: string;
+  last_name?: string;
+  username?: string;
+  photo_url?: string;
+  auth_date: number;
+  hash: string;
+}
+
+export interface UserProfile {
+  telegram_id: number;
+  telegram_nickname: string;
+  vk_nickname: string;
+  status: number;
+  full_name: string;
+  phone_number: string;
+  live_metro_station: number[];
+  study_metro_station: number[];
+  year_of_admission: number;
+  has_driver_license: number;
+  date_of_birth: string;
+  has_printer: number;
+  can_host_night: boolean;
+}
+
+export interface ExternalUserResponse {
+  user_profile: UserProfile;
+}
+
+export interface AuthResponse {
+  success: boolean;
+  message: string;
+  user_profile?: UserProfile;
+  user_role?: number;
 }

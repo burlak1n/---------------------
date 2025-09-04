@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
-import { Calendar, BookOpen, Home, Megaphone, Users, FileText, Menu, X } from 'lucide-react';
+import { Calendar, BookOpen, Home, Megaphone, Users, FileText, Menu, X, LogOut, Shield } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 
 const Layout: React.FC = () => {
   const location = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const { userProfile, userRole, logout } = useAuth();
 
   const navItems = [
     { path: '/', label: 'Главная', icon: Home },
@@ -13,6 +15,7 @@ const Layout: React.FC = () => {
     { path: '/surveys', label: 'Анкеты', icon: FileText },
     { path: '/bookings', label: 'Бронирования', icon: BookOpen },
     { path: '/broadcast', label: 'Рассылка', icon: Megaphone },
+    { path: '/roles', label: 'Роли', icon: Shield },
   ];
 
   return (
@@ -23,8 +26,28 @@ const Layout: React.FC = () => {
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center">
               <h1 className="text-lg sm:text-xl font-semibold text-gray-900">
-                Админка собеседований
+                Система голосования
               </h1>
+            </div>
+            
+            {/* User info and logout */}
+            <div className="flex items-center gap-4">
+              <div className="hidden sm:block text-sm text-gray-600">
+                <div className={`font-medium ${userRole === 1 ? 'text-blue-600' : 'text-gray-900'}`}>
+                  {userProfile?.full_name}
+                </div>
+                <div className="text-xs text-gray-500">
+                  ID: {userProfile?.telegram_id}
+                </div>
+              </div>
+              <button
+                onClick={logout}
+                className="flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors"
+                title="Выйти"
+              >
+                <LogOut className="h-4 w-4" />
+                <span className="hidden sm:inline">Выйти</span>
+              </button>
             </div>
             
             {/* Mobile menu button */}

@@ -18,6 +18,10 @@ use core_logic::{
     CreateBroadcastCommand, BroadcastCreatedResponse, BroadcastStatusResponse,
     GetBroadcastStatusQuery, GetBroadcastMessagesQuery, RetryMessageCommand, CancelBroadcastCommand,
     BroadcastEvent,
+    // Voting system structures
+    Vote, CreateVoteRequest, VoteResponse, NextSurveyResponse, SurveyVoteSummary,
+    // Auth structures
+    TelegramAuth, AuthResponse,
 };
 use core_logic::RabbitMQClient;
 use sqlx::SqlitePool;
@@ -66,12 +70,19 @@ async fn json_error_handler(
         get_users,
         create_user,
         get_bookings,
+        get_next_survey,
+        create_vote,
+        get_survey_summary,
+        set_user_role,
+        sync_users,
+        authenticate_telegram,
     ),
     components(
-        schemas(Slot, Booking, User, CreateSlotRequest, CreateBookingRequest, CreateUserRequest, Record)
+        schemas(Slot, Booking, User, CreateSlotRequest, CreateBookingRequest, CreateUserRequest, Record, CreateVoteRequest, VoteResponse, NextSurveyResponse, SurveyVoteSummary, TelegramAuth, AuthResponse)
     ),
     tags(
-        (name = "interview-booking", description = "Interview Booking API")
+        (name = "interview-booking", description = "Interview Booking API"),
+        (name = "voting-system", description = "Voting System API")
     )
 )]
 struct ApiDoc;
@@ -103,8 +114,9 @@ async fn main() {
         .route("/slots/{id}", put(update_slot).delete(delete_slot))
         .route("/bookings", post(create_booking).get(get_bookings))
         .route("/bookings/{id}", delete(delete_booking))
-        .route("/users", get(get_users).post(create_user))
-        .route("/users/{id}", put(update_user).delete(delete_user))
+        .route("/user_roles", get(get_users).post(create_user))
+        .route("/user_roles/{id}", put(update_user).delete(delete_user))
+        .route("/votes", get(get_all_votes))
         // Event-Driven broadcast endpoints
         .route("/broadcast", post(create_broadcast).get(get_all_broadcasts))
         .route("/broadcast/{id}", delete(delete_broadcast))
@@ -112,11 +124,18 @@ async fn main() {
         .route("/broadcast/{id}/messages", get(get_broadcast_messages))
         .route("/broadcast/{id}/retry", post(retry_broadcast_message))
         .route("/broadcast/{id}/cancel", post(cancel_broadcast))
+        // Voting system endpoints
+        .route("/surveys/next", get(get_next_survey))
+        .route("/surveys/{id}/vote", post(create_vote))
+        .route("/surveys/{id}/summary", get(get_survey_summary))
+        .route("/users/{id}/role", put(set_user_role))
+        .route("/surveys/sync", post(sync_users))
+        .route("/auth/telegram", post(authenticate_telegram))
         .layer(cors)
         .layer(middleware::from_fn(json_error_handler))
         .with_state(state);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
     println!("🚀 API сервер запускается на {}", addr);
     println!("📝 Логирование включено");
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
@@ -297,20 +316,38 @@ async fn get_bookings(State(state): State<AppState>) -> Result<Json<Vec<Record>>
 
 #[utoipa::path(
     get,
-    path = "/users",
+    path = "/user_roles",
     responses(
-        (status = 200, description = "List all users", body = [User])
+        (status = 200, description = "List of responsible user IDs", body = Vec<i64>)
     )
 )]
-async fn get_users(State(state): State<AppState>) -> Result<Json<Vec<User>>, (StatusCode, String)> {
+async fn get_users(State(state): State<AppState>) -> Result<Json<Vec<i64>>, (StatusCode, String)> {
     match core_logic::db::get_users(&state.pool).await {
-        Ok(users) => Ok(Json(users)),
+        Ok(telegram_ids) => Ok(Json(telegram_ids)),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Database error: {}", e),
         )),
     }
 }
+
+#[utoipa::path(
+    get,
+    path = "/votes",
+    responses(
+        (status = 200, description = "List of all votes", body = [Vote])
+    )
+)]
+async fn get_all_votes(State(state): State<AppState>) -> Result<Json<Vec<Vote>>, (StatusCode, String)> {
+    match core_logic::db::get_all_votes(&state.pool).await {
+        Ok(votes) => Ok(Json(votes)),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Database error: {}", e),
+        )),
+    }
+}
+
 
 
 
@@ -458,9 +495,7 @@ async fn create_broadcast(
 ) -> Result<Json<BroadcastCreatedResponse>, (StatusCode, String)> {
     println!("=== CREATE BROADCAST REQUEST ===");
     println!("Message: {}", payload.message);
-    println!("Selected users: {:?}", payload.selected_users);
     println!("Selected external users: {:?}", payload.selected_external_users);
-    println!("Include users without telegram: {}", payload.include_users_without_telegram);
     
     // ЗАКОММЕНТИРОВАНО: Логика работы с локальными пользователями
     // let users = if let Some(selected_user_ids) = &payload.selected_users {
@@ -633,6 +668,194 @@ async fn cancel_broadcast(
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to cancel broadcast: {}", e),
+        )),
+    }
+}
+
+// Voting System Endpoints
+
+#[utoipa::path(
+    get,
+    path = "/surveys/next",
+    params(
+        ("telegram_id" = i64, Query, description = "Telegram ID пользователя")
+    ),
+    responses(
+        (status = 200, description = "Next survey retrieved successfully", body = NextSurveyResponse)
+    )
+)]
+async fn get_next_survey(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<NextSurveyResponse>, (StatusCode, String)> {
+    let telegram_id = params.get("telegram_id")
+        .and_then(|s| s.parse::<i64>().ok())
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "telegram_id is required".to_string()))?;
+    
+    match core_logic::get_next_survey(&state.pool, telegram_id).await {
+        Ok(response) => Ok(Json(response)),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Database error: {}", e),
+        )),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/surveys/{id}/vote",
+    params(
+        ("id" = i64, Path, description = "Survey ID (Telegram ID владельца анкеты)"),
+        ("telegram_id" = i64, Query, description = "Telegram ID голосующего")
+    ),
+    request_body = CreateVoteRequest,
+    responses(
+        (status = 200, description = "Vote created successfully", body = VoteResponse)
+    )
+)]
+async fn create_vote(
+    State(state): State<AppState>,
+    Path(survey_id): Path<i64>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    Json(payload): Json<CreateVoteRequest>,
+) -> Result<Json<VoteResponse>, (StatusCode, String)> {
+    let voter_telegram_id = params.get("telegram_id")
+        .and_then(|s| s.parse::<i64>().ok())
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "telegram_id is required".to_string()))?;
+    
+    // Убеждаемся, что survey_id в пути совпадает с survey_id в теле запроса
+    if payload.survey_id != survey_id {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Survey ID in path and body must match".to_string(),
+        ));
+    }
+    
+    match core_logic::handle_vote(&state.pool, payload, voter_telegram_id).await {
+        Ok(response) => Ok(Json(response)),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Database error: {}", e),
+        )),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/surveys/{id}/summary",
+    params(
+        ("id" = i64, Path, description = "Survey ID (Telegram ID владельца анкеты)")
+    ),
+    responses(
+        (status = 200, description = "Survey summary retrieved successfully", body = SurveyVoteSummary)
+    )
+)]
+async fn get_survey_summary(
+    State(state): State<AppState>,
+    Path(survey_id): Path<i64>,
+) -> Result<Json<SurveyVoteSummary>, (StatusCode, String)> {
+    match core_logic::get_survey_vote_summary(&state.pool, survey_id).await {
+        Ok(summary) => Ok(Json(summary)),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Database error: {}", e),
+        )),
+    }
+}
+
+#[utoipa::path(
+    put,
+    path = "/users/{id}/role",
+    params(
+        ("id" = i64, Path, description = "Telegram ID пользователя")
+    ),
+    request_body = i32,
+    responses(
+        (status = 200, description = "User role updated successfully")
+    )
+)]
+async fn set_user_role(
+    State(state): State<AppState>,
+    Path(telegram_id): Path<i64>,
+    Json(role): Json<i32>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    if role != 0 && role != 1 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Role must be 0 (regular user) or 1 (responsible user)".to_string(),
+        ));
+    }
+    
+    match core_logic::set_user_role(&state.pool, telegram_id, role).await {
+        Ok(_) => Ok(StatusCode::OK),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Database error: {}", e),
+        )),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/surveys/sync",
+    responses(
+        (status = 200, description = "Users synced successfully")
+    )
+)]
+async fn sync_users(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    match core_logic::db::sync_users_from_external_api(&state.pool).await {
+        Ok(synced_user_ids) => {
+            let response = serde_json::json!({
+                "success": true,
+                "message": format!("Синхронизировано {} пользователей", synced_user_ids.len()),
+                "synced_count": synced_user_ids.len(),
+                "user_ids": synced_user_ids
+            });
+            Ok(Json(response))
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка синхронизации: {}", e),
+        )),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/auth/telegram",
+    request_body = TelegramAuth,
+    responses(
+        (status = 200, description = "Authentication result", body = AuthResponse)
+    )
+)]
+#[axum::debug_handler]
+async fn authenticate_telegram(
+    State(state): State<AppState>,
+    Json(telegram_auth): Json<TelegramAuth>,
+) -> Result<Json<AuthResponse>, (StatusCode, String)> {
+    match core_logic::authenticate_user(telegram_auth.clone()).await {
+        Ok(mut auth_response) => {
+            if auth_response.success {
+                // Получаем роль пользователя из базы данных
+                match core_logic::get_user_role_from_db(&state.pool, telegram_auth.id).await {
+                    Ok(user_role) => {
+                        auth_response.user_role = user_role;
+                        Ok(Json(auth_response))
+                    }
+                    Err(e) => {
+                        eprintln!("Ошибка получения роли пользователя: {}", e);
+                        Ok(Json(auth_response)) // Возвращаем ответ без роли
+                    }
+                }
+            } else {
+                Ok(Json(auth_response))
+            }
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка авторизации: {}", e),
         )),
     }
 }

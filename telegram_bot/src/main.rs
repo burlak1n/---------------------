@@ -357,8 +357,8 @@ async fn handle_confirm_booking(q: &CallbackQuery, bot: Bot, data: &str, pool: A
                         Ok(Some(user)) => user,
                         Ok(None) => {
                             let new_user = CreateUserRequest {
-                                name: q.from.first_name.clone(),
                                 telegram_id: telegram_id,
+                                role: 0, // По умолчанию обычный пользователь
                             };
                             match core_logic::db::create_user(&pool, new_user).await {
                                 Ok(user) => user,

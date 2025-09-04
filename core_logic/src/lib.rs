@@ -31,6 +31,10 @@ pub use db::{
     delete_broadcast,
     // Query handlers
     handle_get_broadcast_status, handle_get_broadcast_messages,
+    // Voting system functions
+    get_user_role, set_user_role, get_next_survey, handle_vote, get_survey_vote_summary, sync_users_from_external_api,
+    // Auth functions
+    authenticate_user, get_user_role_from_db,
 };
 
 pub use rabbitmq::{RabbitMQClient, EventsWorker, MessagesWorker};
@@ -180,8 +184,8 @@ pub struct CreateBookingRequest {
 // Новая структура для запроса на создание пользователя
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateUserRequest {
-    pub name: String,
     pub telegram_id: i64,
+    pub role: i32,
 }
 
 // Новая структура для запроса на обновление слота
@@ -201,7 +205,7 @@ pub struct UpdateBookingRequest {
 // Новая структура для запроса на обновление пользователя
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateUserRequest {
-    pub name: Option<String>,
+    pub role: i32,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -430,4 +434,120 @@ pub struct BookingInfo {
     #[schema(value_type = String)]
     pub time: DateTime<Utc>,
     pub place: String,
+}
+
+// Voting System Structures
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize, ToSchema)]
+pub struct Vote {
+    pub id: i64,
+    pub survey_id: i64,                    // Telegram ID владельца анкеты
+    pub voter_telegram_id: i64,            // Telegram ID голосующего
+    pub decision: i32,                     // 1 - approve, 0 - reject
+    pub comment: Option<String>,
+    pub created_at: NaiveDateTime,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize, ToSchema)]
+pub struct UserRole {
+    pub telegram_id: i64,
+    pub role: i32,                         // 0 - обычный, 1 - ответственный
+    pub created_at: NaiveDateTime,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct CreateVoteRequest {
+    pub survey_id: i64,                    // Telegram ID владельца анкеты
+    pub decision: i32,                     // 1 - approve, 0 - reject
+    pub comment: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct SurveyVoteSummary {
+    pub survey_id: i64,                    // Telegram ID владельца анкеты
+    pub total_votes: i64,
+    pub approve_votes: i64,
+    pub reject_votes: i64,
+    pub status: SurveyStatus,
+    pub has_responsible_vote: bool,        // Есть ли голос от ответственного
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub enum SurveyStatus {
+    InProgress,                            // Меньше 5 голосов
+    ReadyForReview,                       // 5+ голосов, нет голоса от ответственного
+    Completed,                            // Есть голос от ответственного
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct NextSurveyResponse {
+    pub survey_id: Option<i64>,
+    pub survey_data: Option<UserSurvey>,
+    pub vote_summary: Option<SurveyVoteSummary>,
+    pub user_role: i32,                    // 0 - обычный, 1 - ответственный
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct VoteResponse {
+    pub success: bool,
+    pub message: String,
+    pub next_survey: Option<NextSurveyResponse>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct UserSurvey {
+    pub telegram_id: i64,
+    pub username: String,
+    pub full_name: String,
+    pub faculty: String,
+    pub group: String,
+    pub phone: String,
+    pub email: Option<String>,
+    pub birth_date: Option<String>,
+    pub education_level: Option<String>,
+    pub experience: Option<String>,
+    pub skills: Option<Vec<String>>,
+    pub interests: Option<Vec<String>>,
+    pub completed_at: String,
+}
+
+// Авторизация через Telegram
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct TelegramAuth {
+    pub id: i64,
+    pub first_name: String,
+    pub last_name: Option<String>,
+    pub username: Option<String>,
+    pub photo_url: Option<String>,
+    pub auth_date: i64,
+    pub hash: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct UserProfile {
+    pub telegram_id: i64,
+    pub telegram_nickname: String,
+    pub vk_nickname: String,
+    pub status: i32,
+    pub full_name: String,
+    pub phone_number: String,
+    pub live_metro_station: Vec<i32>,
+    pub study_metro_station: Vec<i32>,
+    pub year_of_admission: i32,
+    pub has_driver_license: i32,
+    pub date_of_birth: String,
+    pub has_printer: i32,
+    pub can_host_night: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ExternalUserResponse {
+    pub user_profile: UserProfile,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct AuthResponse {
+    pub success: bool,
+    pub message: String,
+    pub user_profile: Option<UserProfile>,
+    pub user_role: Option<i32>,
 }
