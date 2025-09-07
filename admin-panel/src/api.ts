@@ -22,11 +22,16 @@ import type {
   UserSurvey,
   SurveyStructure,
   SurveyStatistics,
+  // Voting system types
+  Vote,
+  CreateVoteRequest,
+  NextSurveyResponse,
+  VoteResponse,
 } from './types';
-import { JSONDataManager, DebugDataManager, type ParsedSurveyResponse } from './utils/jsonUtils';
+import { JSONDataManager, DebugDataManager } from './utils/jsonUtils';
 
 const api = axios.create({
-  baseURL: 'http://localhost.local:3000',
+  baseURL: '/api',
   headers: {
     'Content-Type': 'application/json',
   },
@@ -220,8 +225,30 @@ export const externalUsersApi = {
     }
 
     try {
-      const response = await externalApi.get<ExternalUser[]>('/api/users/completed');
-      return response.data;
+      const allUsers: ExternalUser[] = [];
+      let skip = 0;
+      const limit = 100; // Размер страницы
+      
+      while (true) {
+        const response = await externalApi.get<ExternalUser[]>(`/api/users/completed?limit=${limit}&skip=${skip}`);
+        const users = response.data;
+        
+        if (users.length === 0) {
+          // Больше пользователей нет
+          break;
+        }
+        
+        allUsers.push(...users);
+        skip += limit;
+        
+        // Если получили меньше чем limit, значит это последняя страница
+        if (users.length < limit) {
+          break;
+        }
+      }
+      
+      console.log(`✅ Получено ${allUsers.length} пользователей с внешнего API`);
+      return allUsers;
     } catch (error: any) {
       console.error('Error fetching external users:', error);
       throw new Error(error.response?.data || 'Ошибка при получении пользователей из внешнего API');
@@ -423,5 +450,53 @@ export const externalUsersApi = {
     } catch {
       return false;
     }
+  }
+};
+
+// Votes API
+export const votesApi = {
+  getAll: async (): Promise<Vote[]> => {
+    const response = await api.get<Vote[]>('/votes');
+    return response.data;
+  },
+
+  getResponsibleUsers: async (): Promise<number[]> => {
+    const response = await api.get<number[]>('/user_roles');
+    return response.data;
+  },
+  
+  getBySurveyId: async (surveyId: number): Promise<Vote[]> => {
+    const response = await api.get<Vote[]>(`/votes/survey/${surveyId}`);
+    return response.data;
+  },
+  
+  create: async (vote: CreateVoteRequest, voterTelegramId: number): Promise<Vote> => {
+    const response = await api.post<Vote>(`/votes?telegram_id=${voterTelegramId}`, vote);
+    return response.data;
+  },
+  
+  update: async (id: number, vote: Partial<CreateVoteRequest>): Promise<Vote> => {
+    const response = await api.put<Vote>(`/votes/${id}`, vote);
+    return response.data;
+  },
+  
+  delete: async (id: number): Promise<void> => {
+    await api.delete(`/votes/${id}`);
+  },
+  
+  
+  getNextSurvey: async (telegramId: number): Promise<NextSurveyResponse> => {
+    const response = await api.get<NextSurveyResponse>(`/surveys/next?telegram_id=${telegramId}`);
+    return response.data;
+  },
+  
+  submitVote: async (surveyId: number, vote: CreateVoteRequest, telegramId: number): Promise<VoteResponse> => {
+    const response = await api.post<VoteResponse>(`/surveys/${surveyId}/vote?telegram_id=${telegramId}`, vote);
+    return response.data;
+  },
+  
+  clearLocks: async (telegramId: number): Promise<number> => {
+    const response = await api.post<number>(`/votes/clear-locks/${telegramId}`);
+    return response.data;
   }
 };

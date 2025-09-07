@@ -4,19 +4,20 @@ import DrawingRenderer from './DrawingRenderer';
 
 interface SurveyDisplayProps {
   survey: UserSurvey;
+  surveyId?: number;
 }
 
-// Функция для отображения текста с переносами строк
+// Функция для отображения текста с переносами строк и обработкой ссылок
 const formatTextWithLineBreaks = (text: string) => {
   return text.split('\n').map((line, index) => (
     <React.Fragment key={index}>
-      {line}
+      <span className="break-words whitespace-pre-wrap">{line}</span>
       {index < text.split('\n').length - 1 && <br />}
     </React.Fragment>
   ));
 };
 
-const SurveyDisplay: React.FC<SurveyDisplayProps> = ({ survey }) => {
+const SurveyDisplay: React.FC<SurveyDisplayProps> = ({ survey, surveyId }) => {
   return (
     <div className="space-y-4 text-left">
       {/* Заголовок и время */}
@@ -35,19 +36,22 @@ const SurveyDisplay: React.FC<SurveyDisplayProps> = ({ survey }) => {
               {survey.phone}
             </a>
           </div>
+          <div className="text-xs text-gray-500 mt-1 font-mono">
+            ID: {surveyId || survey.telegram_id}
+          </div>
         </div>
         <div className="text-sm text-gray-600 text-right">
-          <div>{new Date(survey.completed_at).toLocaleDateString('ru-RU', { 
+          <div>{new Date(survey.created_at).toLocaleDateString('ru-RU', { 
             day: '2-digit', 
             month: '2-digit', 
             year: '2-digit' 
-          })} {new Date(survey.completed_at).toLocaleTimeString('ru-RU', { 
+          })} {new Date(survey.created_at).toLocaleTimeString('ru-RU', { 
             hour: '2-digit', 
             minute: '2-digit' 
           })}</div>
-          {survey.survey_data?.completion_time_seconds && (
+          {survey.completion_time_seconds && (
             <div className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs font-medium">
-              {Math.floor(survey.survey_data.completion_time_seconds / 60)}:{String(survey.survey_data.completion_time_seconds % 60).padStart(2, '0')}
+              {Math.floor(survey.completion_time_seconds / 60)}:{String(survey.completion_time_seconds % 60).padStart(2, '0')}
             </div>
           )}
         </div>
@@ -57,18 +61,18 @@ const SurveyDisplay: React.FC<SurveyDisplayProps> = ({ survey }) => {
       <div className="space-y-4">
         {/* Вопрос 1 */}
         <div>
-          <p className={`text-sm ${survey.survey_data?.q1 ? 'text-gray-600' : 'text-red-600'}`}>1. Если бы ты был мемом, то каким?</p>
-          {survey.survey_data?.q1 && (
-            <p className="text-base text-gray-900 font-medium mt-1">{formatTextWithLineBreaks(survey.survey_data.q1)}</p>
+          <p className={`text-sm ${survey.q1 ? 'text-gray-600' : 'text-red-600'}`}>1. Если бы ты был мемом, то каким?</p>
+          {survey.q1 && (
+            <p className="text-base text-gray-900 font-medium mt-1">{formatTextWithLineBreaks(survey.q1)}</p>
           )}
         </div>
 
         {/* Вопрос 2 - множественный выбор */}
         <div>
-          <p className={`text-sm ${(survey.skills && survey.skills.length > 0) ? 'text-gray-600' : 'text-red-600'}`}>2. Чем ты занимался(-ась) в школе?</p>
-          {survey.skills && survey.skills.length > 0 && (
+          <p className={`text-sm ${(survey.q2 && survey.q2.length > 0) ? 'text-gray-600' : 'text-red-600'}`}>2. Чем ты занимался(-ась) в школе?</p>
+          {survey.q2 && survey.q2.length > 0 && (
             <div className="mt-1">
-              {survey.skills.map((skill, index) => (
+              {survey.q2.map((skill, index) => (
                 <p key={index} className="text-base text-gray-900 font-medium">
                   • {formatTextWithLineBreaks(skill)}
                 </p>
@@ -79,17 +83,17 @@ const SurveyDisplay: React.FC<SurveyDisplayProps> = ({ survey }) => {
 
         {/* Вопрос 3 */}
         <div>
-          <p className={`text-sm ${(survey.interests && survey.interests[0]) ? 'text-gray-600' : 'text-red-600'}`}>3. Какое твое самое большое достижение в жизни, не связанное с учебой?</p>
-          {survey.interests && survey.interests[0] && (
-            <p className="text-base text-gray-900 font-medium mt-1">{formatTextWithLineBreaks(survey.interests[0])}</p>
+          <p className={`text-sm ${survey.q3 ? 'text-gray-600' : 'text-red-600'}`}>3. Какое твое самое большое достижение в жизни, не связанное с учебой?</p>
+          {survey.q3 && (
+            <p className="text-base text-gray-900 font-medium mt-1">{formatTextWithLineBreaks(survey.q3)}</p>
           )}
         </div>
 
         {/* Вопрос 4 */}
         <div>
-          <p className={`text-sm ${(survey.interests && survey.interests[1]) ? 'text-gray-600' : 'text-red-600'}`}>4. Охарактеризуй себя 3 словами, которые начинаются на эти буквы: Ч, У, Г</p>
-          {survey.interests && survey.interests[1] && (
-            <p className="text-base text-gray-900 font-medium mt-1">{formatTextWithLineBreaks(survey.interests[1])}</p>
+          <p className={`text-sm ${survey.q4 ? 'text-gray-600' : 'text-red-600'}`}>4. Охарактеризуй себя 3 словами, которые начинаются на эти буквы: Ч, У, Г</p>
+          {survey.q4 && (
+            <p className="text-base text-gray-900 font-medium mt-1">{formatTextWithLineBreaks(survey.q4)}</p>
           )}
         </div>
 

@@ -3,12 +3,9 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Layout from './components/Layout';
 import LoginScreen from './components/LoginScreen';
 import Dashboard from './pages/Dashboard';
-import Slots from './pages/Slots';
-import ExternalUsers from './pages/ExternalUsers';
 import Surveys from './pages/Surveys';
-import Bookings from './pages/Bookings';
-import Broadcast from './pages/Broadcast';
 import Roles from './pages/Roles';
+import Votes from './pages/Votes';
 import './App.css';
 
 const AppRoutes: React.FC = () => {
@@ -30,12 +27,14 @@ const AppRoutes: React.FC = () => {
     <Router>
       <Routes>
         <Route path="/" element={<Layout />}>
-          <Route index element={<Dashboard />} />
-          <Route path="slots" element={<Slots />} />
-          <Route path="external-users" element={<ExternalUsers />} />
+          <Route index element={<Navigate to="/surveys" replace />} />
           <Route path="surveys" element={<Surveys />} />
-          <Route path="bookings" element={<Bookings />} />
-          <Route path="broadcast" element={<Broadcast />} />
+          <Route path="dashboard" element={<Dashboard />} />
+          {/* <Route path="slots" element={<Slots />} /> */}
+          {/* <Route path="external-users" element={<ExternalUsers />} /> */}
+          <Route path="votes" element={<Votes />} />
+          {/* <Route path="bookings" element={<Bookings />} />
+          <Route path="broadcast" element={<Broadcast />} /> */}
           <Route path="roles" element={<Roles />} />
         </Route>
       </Routes>

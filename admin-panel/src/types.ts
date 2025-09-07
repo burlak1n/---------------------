@@ -245,6 +245,11 @@ export interface CreateVoteRequest {
   comment?: string;
 }
 
+export interface UpdateVoteRequest {
+  decision: number;                     // 1 - approve, 0 - reject
+  comment?: string;
+}
+
 export interface SurveyVoteSummary {
   survey_id: number;                    // Telegram ID владельца анкеты
   total_votes: number;
@@ -252,6 +257,8 @@ export interface SurveyVoteSummary {
   reject_votes: number;
   status: SurveyStatus;
   has_responsible_vote: boolean;        // Есть ли голос от ответственного
+  has_responsible_approve_vote: boolean; // Есть ли положительный голос от ответственного
+  in_progress_votes?: number;           // Количество голосов "В обработке"
 }
 
 export type SurveyStatus = 'InProgress' | 'ReadyForReview' | 'Completed';
@@ -259,7 +266,7 @@ export type SurveyStatus = 'InProgress' | 'ReadyForReview' | 'Completed';
 export interface NextSurveyResponse {
   survey_id?: number;
   survey_data?: UserSurvey;
-  vote_summary?: SurveyVoteSummary;
+  votes?: Vote[];
   user_role: number;                    // 0 - обычный, 1 - ответственный
 }
 
@@ -282,18 +289,18 @@ export interface TelegramAuth {
 
 export interface UserProfile {
   telegram_id: number;
-  telegram_nickname: string;
-  vk_nickname: string;
-  status: number;
-  full_name: string;
-  phone_number: string;
-  live_metro_station: number[];
-  study_metro_station: number[];
-  year_of_admission: number;
-  has_driver_license: number;
-  date_of_birth: string;
-  has_printer: number;
-  can_host_night: boolean;
+  telegram_nickname?: string;
+  vk_nickname?: string;
+  status?: number;
+  full_name?: string;
+  phone_number?: string;
+  live_metro_station?: number[];
+  study_metro_station?: number[];
+  year_of_admission?: number;
+  has_driver_license?: number;
+  date_of_birth?: string;
+  has_printer?: number;
+  can_host_night?: boolean;
 }
 
 export interface ExternalUserResponse {

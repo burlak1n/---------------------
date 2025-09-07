@@ -26,8 +26,9 @@ pub struct RabbitMQClient {
 impl RabbitMQClient {
     /// Создает новый клиент RabbitMQ
     pub async fn new() -> Result<Self, Error> {
-        let rabbitmq_url = std::env::var("RABBITMQ_URL")
-            .unwrap_or_else(|_| "amqp://localhost:5672".to_string());
+        let rabbitmq_url = std::env::var("RABBITMQ_URI")
+            .unwrap_or_else(|_| "amqp://localhost:5672".to_string())
+            .replace("S0qtgygTRBmYi1vJAclrXCqevQpG7YWU/Ru3uWJeHkw=", "S0qtgygTRBmYi1vJAclrXCqevQpG7YWU%2FRu3uWJeHkw%3D");
 
         let conn = Connection::connect(
             &rabbitmq_url,

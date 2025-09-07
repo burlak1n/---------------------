@@ -1,12 +1,13 @@
 import React, { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
 import type { UserProfile, TelegramAuth, AuthResponse } from '../types';
+import { votesApi } from '../api';
 
 interface AuthContextType {
   isAuthenticated: boolean;
   userProfile: UserProfile | null;
   userRole: number;
   authenticate: (telegramAuth: TelegramAuth) => Promise<boolean>;
-  logout: () => void;
+  logout: () => Promise<void>;
   updateUserRole: (newRole: number) => void;
   checkUserRole: (telegramId: number) => Promise<void>;
   loading: boolean;
@@ -35,7 +36,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   useEffect(() => {
     const checkUserRole = async (telegramId: number) => {
       try {
-        const response = await fetch('http://localhost.local:3000/user_roles');
+        const response = await fetch('/api/user_roles');
         if (response.ok) {
           const responsibleIds: number[] = await response.json();
           const actualRole = responsibleIds.includes(telegramId) ? 1 : 0;
@@ -99,9 +100,28 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     initializeAuth();
   }, []);
 
+  // Очищаем блокировки при закрытии вкладки
+  useEffect(() => {
+    const handleBeforeUnload = async () => {
+      if (userProfile?.telegram_id) {
+        try {
+          await votesApi.clearLocks(userProfile.telegram_id);
+        } catch (error) {
+          console.error('Ошибка при очистке блокировок при закрытии:', error);
+        }
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [userProfile?.telegram_id]);
+
   const checkUserRole = async (telegramId: number) => {
     try {
-      const response = await fetch('http://localhost.local:3000/user_roles');
+      const response = await fetch('/api/user_roles');
       if (response.ok) {
         const responsibleIds: number[] = await response.json();
         const actualRole = responsibleIds.includes(telegramId) ? 1 : 0;
@@ -128,7 +148,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const authenticate = async (telegramAuth: TelegramAuth): Promise<boolean> => {
     try {
-      const response = await fetch('http://localhost.local:3000/auth/telegram', {
+      console.log('🔐 Начинаем авторизацию пользователя:', telegramAuth.id);
+      
+      const response = await fetch('/api/auth/telegram', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -136,9 +158,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         body: JSON.stringify(telegramAuth),
       });
       
+      console.log('📡 Статус ответа сервера:', response.status);
+      
       if (response.ok) {
         const authResult: AuthResponse = await response.json();
+        console.log('📋 Результат авторизации:', authResult);
+        
         if (authResult.success && authResult.user_profile) {
+          console.log('✅ Авторизация успешна');
           setIsAuthenticated(true);
           setUserProfile(authResult.user_profile);
           setUserRole(authResult.user_role || 0);
@@ -150,11 +177,15 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           }));
           
           return true;
+        } else {
+          console.log('❌ Авторизация не удалась:', authResult.message);
         }
+      } else {
+        console.log('❌ Ошибка HTTP:', response.status, response.statusText);
       }
       return false;
     } catch (error) {
-      console.error('Ошибка авторизации:', error);
+      console.error('❌ Ошибка авторизации:', error);
       return false;
     }
   };
@@ -175,7 +206,17 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
-  const logout = () => {
+  const logout = async () => {
+    // Очищаем блокировки пользователя перед выходом
+    if (userProfile?.telegram_id) {
+      try {
+        const clearedCount = await votesApi.clearLocks(userProfile.telegram_id);
+        console.log(`🧹 Очищено ${clearedCount} блокировок при выходе`);
+      } catch (error) {
+        console.error('Ошибка при очистке блокировок:', error);
+      }
+    }
+    
     setIsAuthenticated(false);
     setUserProfile(null);
     setUserRole(0);

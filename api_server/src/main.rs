@@ -21,7 +21,7 @@ use core_logic::{
     // Voting system structures
     Vote, CreateVoteRequest, VoteResponse, NextSurveyResponse, SurveyVoteSummary,
     // Auth structures
-    TelegramAuth, AuthResponse,
+    TelegramAuth, AuthResponse, UpdateVoteRequest,
 };
 use core_logic::RabbitMQClient;
 use sqlx::SqlitePool;
@@ -76,9 +76,10 @@ async fn json_error_handler(
         set_user_role,
         sync_users,
         authenticate_telegram,
+        clear_user_locks,
     ),
     components(
-        schemas(Slot, Booking, User, CreateSlotRequest, CreateBookingRequest, CreateUserRequest, Record, CreateVoteRequest, VoteResponse, NextSurveyResponse, SurveyVoteSummary, TelegramAuth, AuthResponse)
+        schemas(Slot, Booking, User, CreateSlotRequest, CreateBookingRequest, CreateUserRequest, Record, CreateVoteRequest, UpdateVoteRequest, VoteResponse, NextSurveyResponse, SurveyVoteSummary, TelegramAuth, AuthResponse)
     ),
     tags(
         (name = "interview-booking", description = "Interview Booking API"),
@@ -117,6 +118,9 @@ async fn main() {
         .route("/user_roles", get(get_users).post(create_user))
         .route("/user_roles/{id}", put(update_user).delete(delete_user))
         .route("/votes", get(get_all_votes))
+        .route("/votes/{id}", put(update_vote).delete(delete_vote))
+        .route("/votes/survey/{survey_id}", get(get_votes_by_survey))
+        .route("/votes/clear-locks/{telegram_id}", post(clear_user_locks))
         // Event-Driven broadcast endpoints
         .route("/broadcast", post(create_broadcast).get(get_all_broadcasts))
         .route("/broadcast/{id}", delete(delete_broadcast))
@@ -129,6 +133,7 @@ async fn main() {
         .route("/surveys/{id}/vote", post(create_vote))
         .route("/surveys/{id}/summary", get(get_survey_summary))
         .route("/users/{id}/role", put(set_user_role))
+        .route("/users/{id}/info", get(get_user_info))
         .route("/surveys/sync", post(sync_users))
         .route("/auth/telegram", post(authenticate_telegram))
         .layer(cors)
@@ -719,12 +724,18 @@ async fn create_vote(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
     Json(payload): Json<CreateVoteRequest>,
 ) -> Result<Json<VoteResponse>, (StatusCode, String)> {
+    println!("🗳️ Получен запрос голосования для анкеты {} от пользователя", survey_id);
+    println!("📋 Данные голоса: {:?}", payload);
+    
     let voter_telegram_id = params.get("telegram_id")
         .and_then(|s| s.parse::<i64>().ok())
         .ok_or_else(|| (StatusCode::BAD_REQUEST, "telegram_id is required".to_string()))?;
     
+    println!("👤 ID голосующего: {}", voter_telegram_id);
+    
     // Убеждаемся, что survey_id в пути совпадает с survey_id в теле запроса
     if payload.survey_id != survey_id {
+        println!("❌ Несоответствие survey_id: путь={}, тело={}", survey_id, payload.survey_id);
         return Err((
             StatusCode::BAD_REQUEST,
             "Survey ID in path and body must match".to_string(),
@@ -835,21 +846,25 @@ async fn authenticate_telegram(
     State(state): State<AppState>,
     Json(telegram_auth): Json<TelegramAuth>,
 ) -> Result<Json<AuthResponse>, (StatusCode, String)> {
+    println!("🚀 Получен запрос авторизации для пользователя ID: {}", telegram_auth.id);
     match core_logic::authenticate_user(telegram_auth.clone()).await {
         Ok(mut auth_response) => {
+            println!("📋 Результат авторизации: success={}, message={}", auth_response.success, auth_response.message);
             if auth_response.success {
                 // Получаем роль пользователя из базы данных
                 match core_logic::get_user_role_from_db(&state.pool, telegram_auth.id).await {
                     Ok(user_role) => {
+                        println!("👤 Роль пользователя {}: {:?}", telegram_auth.id, user_role);
                         auth_response.user_role = user_role;
                         Ok(Json(auth_response))
                     }
                     Err(e) => {
-                        eprintln!("Ошибка получения роли пользователя: {}", e);
+                        eprintln!("❌ Ошибка получения роли пользователя: {}", e);
                         Ok(Json(auth_response)) // Возвращаем ответ без роли
                     }
                 }
             } else {
+                println!("❌ Авторизация не удалась: {}", auth_response.message);
                 Ok(Json(auth_response))
             }
         }
@@ -859,3 +874,126 @@ async fn authenticate_telegram(
         )),
     }
 }
+
+// Additional Vote Management Endpoints
+
+#[utoipa::path(
+    put,
+    path = "/votes/{id}",
+    params(
+        ("id" = i64, Path, description = "Vote ID")
+    ),
+    request_body = UpdateVoteRequest,
+    responses(
+        (status = 200, description = "Vote updated successfully", body = Vote)
+    )
+)]
+async fn update_vote(
+    State(state): State<AppState>,
+    Path(vote_id): Path<i64>,
+    Json(payload): Json<UpdateVoteRequest>,
+) -> Result<Json<Vote>, (StatusCode, String)> {
+    match core_logic::db::update_vote(&state.pool, vote_id, payload).await {
+        Ok(vote) => Ok(Json(vote)),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Database error: {}", e),
+        )),
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/votes/{id}",
+    params(
+        ("id" = i64, Path, description = "Vote ID")
+    ),
+    responses(
+        (status = 204, description = "Vote deleted successfully")
+    )
+)]
+async fn delete_vote(
+    State(state): State<AppState>,
+    Path(vote_id): Path<i64>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    match core_logic::db::delete_vote(&state.pool, vote_id).await {
+        Ok(_) => Ok(StatusCode::NO_CONTENT),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Database error: {}", e),
+        )),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/votes/survey/{survey_id}",
+    params(
+        ("survey_id" = i64, Path, description = "Survey ID (Telegram ID владельца анкеты)")
+    ),
+    responses(
+        (status = 200, description = "Votes for survey retrieved successfully", body = [Vote])
+    )
+)]
+async fn get_votes_by_survey(
+    State(state): State<AppState>,
+    Path(survey_id): Path<i64>,
+) -> Result<Json<Vec<Vote>>, (StatusCode, String)> {
+    match core_logic::db::get_votes_by_survey(&state.pool, survey_id).await {
+        Ok(votes) => Ok(Json(votes)),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Database error: {}", e),
+        )),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/votes/clear-locks/{telegram_id}",
+    params(
+        ("telegram_id" = i64, Path, description = "Telegram ID пользователя")
+    ),
+    responses(
+        (status = 200, description = "User locks cleared successfully", body = u64)
+    )
+)]
+async fn clear_user_locks(
+    State(state): State<AppState>,
+    Path(telegram_id): Path<i64>,
+) -> Result<Json<u64>, (StatusCode, String)> {
+    match core_logic::clear_user_locks(&state.pool, telegram_id).await {
+        Ok(cleared_count) => Ok(Json(cleared_count)),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Database error: {}", e),
+        )),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/users/{id}/info",
+    params(
+        ("id" = i64, Path, description = "Telegram ID пользователя")
+    ),
+    responses(
+        (status = 200, description = "User info retrieved successfully", body = User),
+        (status = 404, description = "User not found")
+    )
+)]
+async fn get_user_info(
+    State(state): State<AppState>,
+    Path(telegram_id): Path<i64>,
+) -> Result<Json<User>, (StatusCode, String)> {
+    match core_logic::get_user_by_telegram_id(&state.pool, telegram_id).await {
+        Ok(Some(user_info)) => Ok(Json(user_info)),
+        Ok(None) => Err((StatusCode::NOT_FOUND, "User not found".to_string())),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Database error: {}", e),
+        )),
+    }
+}
+
+

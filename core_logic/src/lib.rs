@@ -33,6 +33,7 @@ pub use db::{
     handle_get_broadcast_status, handle_get_broadcast_messages,
     // Voting system functions
     get_user_role, set_user_role, get_next_survey, handle_vote, get_survey_vote_summary, sync_users_from_external_api,
+    update_vote, delete_vote, get_votes_by_survey, clear_user_locks,
     // Auth functions
     authenticate_user, get_user_role_from_db,
 };
@@ -117,11 +118,14 @@ pub struct ApiResponse {
     pub message: String,
 }
 
-// Структура для пользователей (только telegram_id)
+// Структура для пользователей с расширенной информацией
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, FromRow)]
 pub struct User {
     pub telegram_id: i64,
     pub name: String,
+    pub telegram_nickname: Option<String>,
+    pub phone_number: Option<String>,
+    pub full_name: Option<String>,
 }
 
 // Новая структура для ответа API со слотами
@@ -462,6 +466,12 @@ pub struct CreateVoteRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct UpdateVoteRequest {
+    pub decision: i32,                     // 1 - approve, 0 - reject
+    pub comment: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct SurveyVoteSummary {
     pub survey_id: i64,                    // Telegram ID владельца анкеты
     pub total_votes: i64,
@@ -481,8 +491,8 @@ pub enum SurveyStatus {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct NextSurveyResponse {
     pub survey_id: Option<i64>,
-    pub survey_data: Option<UserSurvey>,
-    pub vote_summary: Option<SurveyVoteSummary>,
+    pub survey_data: Option<serde_json::Value>,
+    pub votes: Option<Vec<Vote>>,
     pub user_role: i32,                    // 0 - обычный, 1 - ответственный
 }
 
@@ -525,18 +535,18 @@ pub struct TelegramAuth {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct UserProfile {
     pub telegram_id: i64,
-    pub telegram_nickname: String,
-    pub vk_nickname: String,
-    pub status: i32,
-    pub full_name: String,
-    pub phone_number: String,
-    pub live_metro_station: Vec<i32>,
-    pub study_metro_station: Vec<i32>,
-    pub year_of_admission: i32,
-    pub has_driver_license: i32,
-    pub date_of_birth: String,
-    pub has_printer: i32,
-    pub can_host_night: bool,
+    pub telegram_nickname: Option<String>,
+    pub vk_nickname: Option<String>,
+    pub status: Option<i32>,
+    pub full_name: Option<String>,
+    pub phone_number: Option<String>,
+    pub live_metro_station: Option<Vec<i32>>,
+    pub study_metro_station: Option<Vec<i32>>,
+    pub year_of_admission: Option<i32>,
+    pub has_driver_license: Option<i32>,
+    pub date_of_birth: Option<String>,
+    pub has_printer: Option<i32>,
+    pub can_host_night: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

@@ -181,14 +181,22 @@ const DrawingRenderer: React.FC<DrawingRendererProps> = ({
   }
 
   return (
-    <div className={`bg-white border border-gray-200 rounded-lg p-2 ${className}`}>
+    <div className={`p-2 ${className}`}>
       <canvas
         ref={canvasRef}
         width={width}
         height={height}
-        className="w-full h-auto"
-        style={{ maxWidth: '100%', height: 'auto' }}
       />
+      {/* Отображение текстовых элементов под рисунком */}
+      {hasTextElements && (
+        <div className="mt-3 space-y-2">
+          {drawingData.textElements.map((el, index) => (
+            <div key={index} className="text-sm text-gray-600 bg-gray-50 p-2 rounded border">
+              {el.text}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };
