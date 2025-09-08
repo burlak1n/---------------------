@@ -2,12 +2,14 @@ import axios from 'axios';
 import type {
   Slot,
   User,
+  Booking,
   BookingRecord,
   CreateSlotRequest,
   CreateUserRequest,
   CreateBookingRequest,
   UpdateSlotRequest,
   UpdateUserRequest,
+  NoResponseUser,
   BroadcastRequest,
   BroadcastResponse,
   // Event-Driven types
@@ -38,10 +40,32 @@ const api = axios.create({
 });
 
 // Отдельный instance для внешнего API
+// Автоматическое определение URL на основе хоста
+const getExternalApiUrl = () => {
+  const hostname = window.location.hostname;
+  
+  // Локальная разработка
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+    return 'http://localhost:3001';
+  }
+  
+  // Продакшен - используем тот же домен
+  if (hostname === 'admin.ingroupsts.ru') {
+    return 'http://localhost:3001';
+  }
+  
+  // Fallback для других случаев
+  return 'http://localhost:3001';
+};
+
+const externalApiUrl = getExternalApiUrl();
+console.log('🔗 External API URL:', externalApiUrl);
+
 const externalApi = axios.create({
-  baseURL: 'https://ingroupsts.ru',
+  baseURL: externalApiUrl,
   headers: {
     'Content-Type': 'application/json',
+    'X-Forwarded-For': '127.0.0.1', // Требуется для локального API
   },
 });
 
@@ -124,8 +148,8 @@ export const bookingsApi = {
     const response = await api.get<BookingRecord[]>('/bookings');
     return response.data;
   },
-  create: async (booking: CreateBookingRequest): Promise<BookingRecord> => {
-    const response = await api.post<BookingRecord>('/bookings', booking);
+  create: async (booking: CreateBookingRequest): Promise<Booking> => {
+    const response = await api.post<Booking>('/bookings', booking);
     return response.data;
   },
   delete: async (id: number): Promise<void> => {
@@ -225,33 +249,59 @@ export const externalUsersApi = {
     }
 
     try {
-      const allUsers: ExternalUser[] = [];
-      let skip = 0;
-      const limit = 100; // Размер страницы
+      // Используем внутренний API админ-панели вместо прямого обращения к внешнему API
+      const response = await api.get<ExternalUser[]>('/external-users');
+      const users = response.data;
       
-      while (true) {
-        const response = await externalApi.get<ExternalUser[]>(`/api/users/completed?limit=${limit}&skip=${skip}`);
-        const users = response.data;
-        
-        if (users.length === 0) {
-          // Больше пользователей нет
-          break;
-        }
-        
-        allUsers.push(...users);
-        skip += limit;
-        
-        // Если получили меньше чем limit, значит это последняя страница
-        if (users.length < limit) {
-          break;
-        }
-      }
-      
-      console.log(`✅ Получено ${allUsers.length} пользователей с внешнего API`);
-      return allUsers;
+      console.log(`✅ Получено ${users.length} пользователей через админ API`);
+      return users;
     } catch (error: any) {
       console.error('Error fetching external users:', error);
       throw new Error(error.response?.data || 'Ошибка при получении пользователей из внешнего API');
+    }
+  },
+
+  // Получение отобранных пользователей (одобренных ответственными)
+  getSelectedUsers: async (): Promise<ExternalUser[]> => {
+    try {
+      const response = await api.get<ExternalUser[]>('/selected-users');
+      const users = response.data;
+      
+      console.log(`✅ Получено ${users.length} отобранных пользователей`);
+      return users;
+    } catch (error: any) {
+      console.error('Error fetching selected users:', error);
+      throw new Error(error.response?.data || 'Ошибка при получении отобранных пользователей');
+    }
+  },
+
+  // Получение пользователей без записи после рассылки о записи
+  getNoResponseUsers: async (): Promise<NoResponseUser[]> => {
+    try {
+      const response = await api.get<NoResponseUser[]>('/no-response-users');
+      const users = response.data;
+      
+      console.log(`✅ Получено ${users.length} пользователей без записи`);
+      return users;
+    } catch (error: any) {
+      console.error('Error fetching no response users:', error);
+      throw new Error(error.response?.data || 'Ошибка при получении пользователей без записи');
+    }
+  },
+
+  // Обновление статуса сообщения рассылки
+  updateMessageStatus: async (telegramId: number, messageType: string, status: string): Promise<void> => {
+    try {
+      await api.put('/broadcast-message-status', {
+        telegram_id: telegramId,
+        message_type: messageType,
+        status: status
+      });
+      
+      console.log(`✅ Статус сообщения обновлен для пользователя ${telegramId}`);
+    } catch (error: any) {
+      console.error('Error updating message status:', error);
+      throw new Error(error.response?.data || 'Ошибка при обновлении статуса сообщения');
     }
   },
 
@@ -328,7 +378,7 @@ export const externalUsersApi = {
     }
 
     try {
-      const response = await externalApi.get<UserSurvey>(`/api/users/${telegramId}/survey`);
+      const response = await api.get<UserSurvey>(`/users/${telegramId}/survey`);
       return response.data;
     } catch (error: any) {
       console.error('Error fetching user survey:', error);

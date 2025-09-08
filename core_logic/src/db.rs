@@ -639,13 +639,14 @@ pub async fn save_broadcast_event(
 
     let now = chrono::Utc::now().naive_utc();
     sqlx::query!(
-        "INSERT INTO broadcast_events (event_id, broadcast_id, event_type, event_data, created_at) 
-         VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO broadcast_events (event_id, broadcast_id, event_type, event_data, created_at, version) 
+         VALUES (?, ?, ?, ?, ?, ?)",
         event_id,
         broadcast_id,
         event_type,
         event_data,
-        now
+        now,
+        1
     )
     .execute(pool)
     .await?;
@@ -919,15 +920,20 @@ pub async fn create_broadcast_message(
     message: &BroadcastMessageRecord,
 ) -> Result<(), sqlx::Error> {
     let status_str = message.status.to_string();
+    let message_type_str = message.message_type.as_ref().map(|mt| match mt {
+        BroadcastMessageType::Custom => "custom",
+        BroadcastMessageType::SignUp => "signup",
+    });
     sqlx::query!(
-        "INSERT INTO broadcast_messages (broadcast_id, telegram_id, status, error, sent_at, retry_count, created_at) 
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO broadcast_messages (broadcast_id, telegram_id, status, error, sent_at, retry_count, message_type, created_at) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         message.broadcast_id,
         message.telegram_id,
         status_str,
         message.error,
         message.sent_at,
         message.retry_count,
+        message_type_str,
         message.created_at
     )
     .execute(pool)
@@ -1007,7 +1013,7 @@ pub async fn get_broadcast_messages(
         let status_str = status.to_string();
         
         sqlx::query!(
-            "SELECT id, broadcast_id, telegram_id, status, error, sent_at, retry_count, created_at 
+            "SELECT id, broadcast_id, telegram_id, status, error, sent_at, retry_count, message_type, created_at 
              FROM broadcast_messages 
              WHERE broadcast_id = ? AND status = ?
              ORDER BY created_at ASC
@@ -1028,13 +1034,17 @@ pub async fn get_broadcast_messages(
             error: row.error,
             sent_at: row.sent_at,
             retry_count: row.retry_count,
-            message_type: None,
+            message_type: row.message_type.as_ref().map(|mt| match mt.as_str() {
+                "custom" => BroadcastMessageType::Custom,
+                "signup" => BroadcastMessageType::SignUp,
+                _ => BroadcastMessageType::Custom,
+            }),
             created_at: row.created_at,
         })
         .collect()
     } else {
         sqlx::query!(
-            "SELECT id, broadcast_id, telegram_id, status, error, sent_at, retry_count, created_at 
+            "SELECT id, broadcast_id, telegram_id, status, error, sent_at, retry_count, message_type, created_at 
              FROM broadcast_messages 
              WHERE broadcast_id = ?
              ORDER BY created_at ASC
@@ -1054,7 +1064,11 @@ pub async fn get_broadcast_messages(
             error: row.error,
             sent_at: row.sent_at,
             retry_count: row.retry_count,
-            message_type: None,
+            message_type: row.message_type.as_ref().map(|mt| match mt.as_str() {
+                "custom" => BroadcastMessageType::Custom,
+                "signup" => BroadcastMessageType::SignUp,
+                _ => BroadcastMessageType::Custom,
+            }),
             created_at: row.created_at,
         })
         .collect()
@@ -1760,7 +1774,7 @@ async fn find_survey_for_regular_user(
     let mut candidates = Vec::new();
     
     for telegram_id in user_telegram_ids {
-        let (total_count, real_count, processing_count) = vote_data.get(&telegram_id).copied().unwrap_or((0, 0, 0));
+        let (_total_count, real_count, processing_count) = vote_data.get(&telegram_id).copied().unwrap_or((0, 0, 0));
         
         // Анкета доступна обычным пользователям если:
         // 1. Реальных голосов меньше MIN_VOTES_FOR_REVIEW
@@ -2007,6 +2021,172 @@ pub async fn clear_user_locks(pool: &SqlitePool, telegram_id: i64) -> Result<u64
         "DELETE FROM votes WHERE voter_telegram_id = ? AND comment = ?",
         telegram_id,
         "В обработке"
+    )
+    .execute(pool)
+    .await?;
+    
+    Ok(result.rows_affected())
+}
+
+/// Получает пользователей с отобранными анкетами (одобренными ответственными)
+pub async fn get_selected_users(pool: &SqlitePool) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+    // Получаем всех пользователей с внешнего API
+    let all_users = get_all_users_from_external_api().await
+        .map_err(|e| sqlx::Error::Protocol(format!("External API error: {}", e)))?;
+    
+    // Получаем анкеты с положительными голосами от ответственных
+    let selected_surveys = sqlx::query!(
+        r#"
+        SELECT DISTINCT v.survey_id
+        FROM votes v
+        JOIN user_roles ur ON v.voter_telegram_id = ur.telegram_id
+        WHERE ur.role = 1 AND v.decision = 1
+        "#
+    )
+    .fetch_all(pool)
+    .await?;
+    
+    let selected_survey_ids: std::collections::HashSet<i64> = selected_surveys
+        .into_iter()
+        .map(|s| s.survey_id)
+        .collect();
+    
+    // Фильтруем пользователей, оставляя только тех, чьи анкеты одобрены
+    let selected_users: Vec<serde_json::Value> = all_users
+        .into_iter()
+        .filter(|user| {
+            if let Some(telegram_id) = user.get("telegram_id").and_then(|v| v.as_i64()) {
+                selected_survey_ids.contains(&telegram_id)
+            } else {
+                false
+            }
+        })
+        .collect();
+    
+    Ok(selected_users)
+}
+
+/// Получает пользователей, которые не выполнили запись после рассылки о записи
+pub async fn get_no_response_users(pool: &SqlitePool) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+    // Получаем всех пользователей с внешнего API
+    let all_users = get_all_users_from_external_api().await
+        .map_err(|e| sqlx::Error::Protocol(format!("External API error: {}", e)))?;
+    
+    // Получаем пользователей, которым была отправлена рассылка о записи (signup)
+    // Включаем как успешно отправленные, так и неудачные сообщения
+    let signup_recipients = sqlx::query!(
+        r#"
+        SELECT DISTINCT telegram_id
+        FROM broadcast_messages bm
+        JOIN broadcast_summaries bs ON bm.broadcast_id = bs.id
+        WHERE bm.message_type = 'signup' 
+        AND bs.status IN ('completed', 'in_progress')
+        AND bm.status IN ('sent', 'failed')
+        "#
+    )
+    .fetch_all(pool)
+    .await?;
+    
+    let signup_telegram_ids: std::collections::HashSet<i64> = signup_recipients
+        .into_iter()
+        .map(|r| r.telegram_id)
+        .collect();
+    
+    // Получаем пользователей, которые уже записались на слоты
+    let booked_users = sqlx::query!(
+        r#"
+        SELECT DISTINCT telegram_id
+        FROM records
+        "#
+    )
+    .fetch_all(pool)
+    .await?;
+    
+    let booked_telegram_ids: std::collections::HashSet<i64> = booked_users
+        .into_iter()
+        .map(|r| r.telegram_id)
+        .collect();
+    
+    // Фильтруем пользователей: получили рассылку о записи, но не записались
+    let no_response_users: Vec<serde_json::Value> = all_users
+        .into_iter()
+        .filter(|user| {
+            if let Some(telegram_id) = user.get("telegram_id").and_then(|v| v.as_i64()) {
+                // Получил рассылку о записи И не записался
+                signup_telegram_ids.contains(&telegram_id) && !booked_telegram_ids.contains(&telegram_id)
+            } else {
+                false
+            }
+        })
+        .collect();
+    
+    Ok(no_response_users)
+}
+
+/// Получает детальную информацию о пользователях без записи с информацией о статусе сообщений
+pub async fn get_no_response_users_detailed(pool: &SqlitePool) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+    // Получаем пользователей, которые получили рассылку о записи, но не записались
+    let no_response_users = sqlx::query!(
+        r#"
+        SELECT DISTINCT 
+            bm.telegram_id,
+            bm.status as message_status,
+            bm.error,
+            bm.sent_at,
+            bm.retry_count,
+            bs.created_at as broadcast_created_at
+        FROM broadcast_messages bm
+        JOIN broadcast_summaries bs ON bm.broadcast_id = bs.id
+        WHERE bm.message_type = 'signup' 
+        AND bs.status IN ('completed', 'in_progress', 'pending')
+        AND bm.status IN ('sent', 'failed')
+        AND bm.telegram_id NOT IN (
+            SELECT DISTINCT telegram_id 
+            FROM records
+        )
+        "#
+    )
+    .fetch_all(pool)
+    .await?;
+    
+    println!("🔍 DEBUG: Found {} no-response users", no_response_users.len());
+    
+    // Преобразуем в JSON формат
+    let result: Vec<serde_json::Value> = no_response_users
+        .into_iter()
+        .map(|user| {
+            serde_json::json!({
+                "telegram_id": user.telegram_id,
+                "message_info": {
+                    "status": user.message_status,
+                    "error": user.error,
+                    "sent_at": user.sent_at,
+                    "retry_count": user.retry_count,
+                    "broadcast_created_at": user.broadcast_created_at
+                }
+            })
+        })
+        .collect();
+    
+    Ok(result)
+}
+
+/// Обновляет статус сообщения рассылки
+pub async fn update_broadcast_message_status_new(
+    pool: &SqlitePool,
+    telegram_id: i64,
+    message_type: &str,
+    new_status: &str
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE broadcast_messages 
+        SET status = $1
+        WHERE telegram_id = $2 AND message_type = $3
+        "#,
+        new_status,
+        telegram_id,
+        message_type
     )
     .execute(pool)
     .await?;

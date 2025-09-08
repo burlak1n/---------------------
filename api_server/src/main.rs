@@ -17,7 +17,6 @@ use core_logic::{
     // Event-Driven structures
     CreateBroadcastCommand, BroadcastCreatedResponse, BroadcastStatusResponse,
     GetBroadcastStatusQuery, GetBroadcastMessagesQuery, RetryMessageCommand, CancelBroadcastCommand,
-    BroadcastEvent,
     // Voting system structures
     Vote, CreateVoteRequest, VoteResponse, NextSurveyResponse, SurveyVoteSummary,
     // Auth structures
@@ -75,6 +74,7 @@ async fn json_error_handler(
         get_survey_summary,
         set_user_role,
         sync_users,
+        get_external_users,
         authenticate_telegram,
         clear_user_locks,
     ),
@@ -134,7 +134,12 @@ async fn main() {
         .route("/surveys/{id}/summary", get(get_survey_summary))
         .route("/users/{id}/role", put(set_user_role))
         .route("/users/{id}/info", get(get_user_info))
+        .route("/users/{id}/survey", get(get_user_survey))
         .route("/surveys/sync", post(sync_users))
+        .route("/external-users", get(get_external_users))
+        .route("/selected-users", get(get_selected_users))
+        .route("/no-response-users", get(get_no_response_users))
+        .route("/broadcast-message-status", put(update_broadcast_message_status))
         .route("/auth/telegram", post(authenticate_telegram))
         .layer(cors)
         .layer(middleware::from_fn(json_error_handler))
@@ -996,4 +1001,170 @@ async fn get_user_info(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/users/{id}/survey",
+    responses(
+        (status = 200, description = "Get user survey data from external API", body = serde_json::Value),
+        (status = 404, description = "User survey not found"),
+        (status = 500, description = "External API error")
+    )
+)]
+async fn get_user_survey(
+    Path(telegram_id): Path<i64>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    println!("📋 GET /users/{}/survey - получение данных пользователя из внешнего API", telegram_id);
+    
+    match core_logic::db::get_user_survey_from_external_api(telegram_id).await {
+        Ok(Some(survey_data)) => {
+            println!("✅ Получены данные пользователя {} из внешнего API", telegram_id);
+            Ok(Json(survey_data))
+        },
+        Ok(None) => {
+            println!("❌ Данные пользователя {} не найдены во внешнем API", telegram_id);
+            Err((StatusCode::NOT_FOUND, "User survey not found".to_string()))
+        },
+        Err(e) => {
+            println!("❌ Ошибка при получении данных пользователя {} из внешнего API: {}", telegram_id, e);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("External API error: {}", e),
+            ))
+        },
+    }
+}
 
+#[utoipa::path(
+    get,
+    path = "/external-users",
+    responses(
+        (status = 200, description = "Get users with completed surveys from external API", body = [serde_json::Value])
+    )
+)]
+async fn get_external_users() -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+    println!("📋 GET /external-users - получение пользователей с завершенными анкетами");
+    
+    match core_logic::db::get_all_users_from_external_api().await {
+        Ok(users) => {
+            println!("✅ Получено {} пользователей с внешнего API", users.len());
+            Ok(Json(users))
+        },
+        Err(e) => {
+            println!("❌ Ошибка при получении пользователей: {}", e);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("External API error: {}", e),
+            ))
+        },
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/selected-users",
+    responses(
+        (status = 200, description = "Get users with selected surveys (approved by responsible users)", body = [serde_json::Value])
+    )
+)]
+async fn get_selected_users(
+    State(state): State<AppState>
+) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+    println!("📋 GET /selected-users - получение отобранных пользователей");
+    
+    match core_logic::db::get_selected_users(&state.pool).await {
+        Ok(users) => {
+            println!("✅ Получено {} отобранных пользователей", users.len());
+            Ok(Json(users))
+        },
+        Err(e) => {
+            println!("❌ Ошибка при получении отобранных пользователей: {}", e);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Database error: {}", e),
+            ))
+        },
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/no-response-users",
+    responses(
+        (status = 200, description = "Get users who received signup broadcast but didn't book a slot", body = [serde_json::Value])
+    )
+)]
+async fn get_no_response_users(
+    State(state): State<AppState>
+) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+    println!("📋 GET /no-response-users - получение пользователей без записи после рассылки");
+    
+    match core_logic::db::get_no_response_users_detailed(&state.pool).await {
+        Ok(users) => {
+            println!("✅ Получено {} пользователей без записи", users.len());
+            Ok(Json(users))
+        },
+        Err(e) => {
+            println!("❌ Ошибка при получении пользователей без записи: {}", e);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Database error: {}", e),
+            ))
+        },
+    }
+}
+
+
+#[derive(serde::Deserialize, utoipa::ToSchema)]
+struct UpdateMessageStatusRequest {
+    telegram_id: i64,
+    message_type: String,
+    status: String,
+}
+
+#[utoipa::path(
+    put,
+    path = "/broadcast-message-status",
+    request_body = UpdateMessageStatusRequest,
+    responses(
+        (status = 200, description = "Message status updated successfully"),
+        (status = 400, description = "Invalid request"),
+        (status = 500, description = "Database error")
+    )
+)]
+async fn update_broadcast_message_status(
+    State(state): State<AppState>,
+    Json(request): Json<UpdateMessageStatusRequest>
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    println!("📝 PUT /broadcast-message-status - обновление статуса сообщения для пользователя {}", request.telegram_id);
+    
+    match core_logic::db::update_broadcast_message_status_new(
+        &state.pool,
+        request.telegram_id,
+        &request.message_type,
+        &request.status
+    ).await {
+        Ok(rows_affected) => {
+            if rows_affected > 0 {
+                println!("✅ Статус сообщения обновлен для пользователя {}", request.telegram_id);
+                Ok(Json(serde_json::json!({
+                    "success": true,
+                    "message": "Статус сообщения обновлен",
+                    "rows_affected": rows_affected
+                })))
+            } else {
+                println!("⚠️ Сообщение не найдено для пользователя {}", request.telegram_id);
+                Err((
+                    StatusCode::NOT_FOUND,
+                    "Сообщение не найдено".to_string(),
+                ))
+            }
+        },
+        Err(e) => {
+            println!("❌ Ошибка при обновлении статуса сообщения: {}", e);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Database error: {}", e),
+            ))
+        },
+    }
+}

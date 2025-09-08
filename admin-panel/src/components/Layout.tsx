@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
-import { FileText, Menu, X, LogOut, Shield, Vote, Home } from 'lucide-react';
+import { FileText, Menu, X, LogOut, Shield, Vote, Home, Calendar, Users, BookOpen, Megaphone, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 const Layout: React.FC = () => {
@@ -13,12 +13,13 @@ const Layout: React.FC = () => {
 
   const navItems = [
     { path: '/dashboard', label: 'Главная', icon: Home },
-    // { path: '/slots', label: 'Слоты', icon: Calendar },
-    // { path: '/external-users', label: 'Пользователи', icon: Users },
+    { path: '/slots', label: 'Слоты', icon: Calendar },
+    { path: '/external-users', label: 'Пользователи', icon: Users },
     { path: '/surveys', label: 'Анкеты', icon: FileText },
     { path: '/votes', label: 'Голоса', icon: Vote },
-    // { path: '/bookings', label: 'Бронирования', icon: BookOpen },
-    // { path: '/broadcast', label: 'Рассылка', icon: Megaphone },
+    { path: '/bookings', label: 'Бронирования', icon: BookOpen },
+    { path: '/broadcast', label: 'Рассылка', icon: Megaphone },
+    { path: '/no-response-users', label: 'Без записи', icon: AlertTriangle },
     { path: '/roles', label: 'Роли', icon: Shield },
   ];
 

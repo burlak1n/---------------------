@@ -130,6 +130,25 @@ export interface ExternalUser {
   group: string;
   phone: string;
   completed_at: string;
+  message_info?: {
+    status: string;
+    error?: string;
+    sent_at?: string;
+    retry_count: number;
+    broadcast_created_at: string;
+  };
+}
+
+// Тип для API no-response-users (только telegram_id и message_info)
+export interface NoResponseUser {
+  telegram_id: number;
+  message_info: {
+    status: string;
+    error?: string | null;
+    sent_at?: string | null;
+    retry_count: number;
+    broadcast_created_at: string;
+  };
 }
 
 export interface ExternalUsersResponse {

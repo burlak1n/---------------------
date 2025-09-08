@@ -5,7 +5,6 @@ import type {
   CreateBroadcastCommand, 
   BroadcastCreatedResponse, 
   BroadcastStatusResponse,
-  BroadcastMessageRecord,
   BroadcastStatus,
   MessageStatus,
   BroadcastSummary,
@@ -30,6 +29,18 @@ const Broadcast: React.FC = () => {
   const [externalUsers, setExternalUsers] = useState<ExternalUser[]>([]);
   const [externalUsersLoading, setExternalUsersLoading] = useState(false);
   const [selectedExternalUsers, setSelectedExternalUsers] = useState<string[]>([]);
+
+  // Состояние для ручного ввода ID
+  const [manualUserIds, setManualUserIds] = useState('');
+  const [useManualIds, setUseManualIds] = useState(false);
+
+  // Состояние для подтверждения рассылки
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [pendingBroadcast, setPendingBroadcast] = useState<{
+    type: 'custom' | 'signup';
+    users: string[];
+    message: string;
+  } | null>(null);
 
   // Состояние для профиля пользователя
   const [selectedUserProfile, setSelectedUserProfile] = useState<number | null>(null);
@@ -75,7 +86,7 @@ const Broadcast: React.FC = () => {
         }
       }, 2000); // Обновляем каждые 2 секунды
 
-      setPollingInterval(interval);
+      setPollingInterval(interval as unknown as number);
     }
   }, [currentBroadcast]);
 
@@ -125,54 +136,51 @@ const Broadcast: React.FC = () => {
       return;
     }
 
-    setLoading(true);
     setError(null);
-    setCurrentBroadcast(null);
-    setBroadcastStatus(null);
 
-    try {
-      const command: CreateBroadcastCommand = {
-        message: message.trim(),
-        message_type: 'custom',
-        selected_external_users: selectedExternalUsers.length > 0 ? selectedExternalUsers : undefined,
-      };
-
-      const response = await broadcastApi.create(command);
-      setCurrentBroadcast(response);
-      setMessage('');
-      // Обновляем историю после создания новой рассылки
-      loadBroadcastHistory();
-    } catch (err) {
-      setError('Ошибка при создании рассылки. Попробуйте позже.');
-      console.error('Broadcast error:', err);
-    } finally {
-      setLoading(false);
+    // Определяем список пользователей для рассылки
+    let usersForBroadcast: string[] = [];
+    
+    if (useManualIds && manualUserIds.trim()) {
+      // Используем вручную введенные ID
+      usersForBroadcast = parseManualUserIds(manualUserIds);
+      
+      if (usersForBroadcast.length === 0) {
+        setError('Не найдено ни одного валидного ID пользователя');
+        return;
+      }
+    } else if (selectedExternalUsers.length > 0) {
+      // Используем выбранных пользователей
+      usersForBroadcast = selectedExternalUsers;
     }
+    // Если usersForBroadcast пустой, рассылка будет всем (но это не ручной режим)
+
+    // Показываем диалог подтверждения
+    showConfirmationDialog('custom', usersForBroadcast, message.trim());
   };
 
   const handleSendSignUpMessage = async () => {
-    setLoading(true);
     setError(null);
-    setCurrentBroadcast(null);
-    setBroadcastStatus(null);
 
-    try {
-      const command: CreateBroadcastCommand = {
-        message: "🎉 Поздравляем! Вы успешно прошли анкетирование и можете записаться на собеседование. Нажмите кнопку ниже для записи.",
-        message_type: 'signup',
-        selected_external_users: selectedExternalUsers.length > 0 ? selectedExternalUsers : undefined,
-      };
-
-      const response = await broadcastApi.create(command);
-      setCurrentBroadcast(response);
-      // Обновляем историю после создания новой рассылки
-      loadBroadcastHistory();
-    } catch (err) {
-      setError('Ошибка при создании рассылки о записи. Попробуйте позже.');
-      console.error('Broadcast error:', err);
-    } finally {
-      setLoading(false);
+    // Определяем список пользователей для рассылки
+    let usersForBroadcast: string[] = [];
+    
+    if (useManualIds && manualUserIds.trim()) {
+      // Используем вручную введенные ID
+      usersForBroadcast = parseManualUserIds(manualUserIds);
+      
+      if (usersForBroadcast.length === 0) {
+        setError('Не найдено ни одного валидного ID пользователя');
+        return;
+      }
+    } else if (selectedExternalUsers.length > 0) {
+      // Используем выбранных пользователей
+      usersForBroadcast = selectedExternalUsers;
     }
+    // Если usersForBroadcast пустой, рассылка будет всем (но это не ручной режим)
+
+    // Показываем диалог подтверждения
+    showConfirmationDialog('signup', usersForBroadcast, "🎉 Поздравляем! Вы успешно прошли анкетирование и можете записаться на собеседование. Нажмите кнопку ниже для записи.");
   };
 
   const handleCancel = async () => {
@@ -281,12 +289,78 @@ const Broadcast: React.FC = () => {
     setSelectedExternalUsers(externalUsers.map(user => user.telegram_id.toString()));
   };
 
+  const selectSelectedUsers = async () => {
+    try {
+      const selectedUsers = await externalUsersApi.getSelectedUsers();
+      setSelectedExternalUsers(selectedUsers.map(user => user.telegram_id.toString()));
+    } catch (err) {
+      console.error('Failed to load selected users:', err);
+      setError('Ошибка при загрузке отобранных пользователей');
+    }
+  };
+
   const clearUserSelection = () => {
     setSelectedExternalUsers([]);
   };
 
   const getSelectedExternalUsersCount = () => selectedExternalUsers.length;
   const getTotalExternalUsersCount = () => externalUsers.length;
+
+  // Функции для работы с ручным вводом ID
+  const parseManualUserIds = (input: string): string[] => {
+    return input
+      .split(/[,\n\s]+/)
+      .map(id => id.trim())
+      .filter(id => id.length > 0 && /^\d+$/.test(id));
+  };
+
+  const getManualUserIdsCount = () => {
+    return parseManualUserIds(manualUserIds).length;
+  };
+
+  const handleManualIdsChange = (value: string) => {
+    setManualUserIds(value);
+    // Автоматически выбираем введенные ID
+    const parsedIds = parseManualUserIds(value);
+    setSelectedExternalUsers(parsedIds);
+  };
+
+  // Функция для показа диалога подтверждения
+  const showConfirmationDialog = (type: 'custom' | 'signup', users: string[], message: string) => {
+    setPendingBroadcast({ type, users, message });
+    setShowConfirmDialog(true);
+  };
+
+  // Функция для выполнения рассылки после подтверждения
+  const executeBroadcast = async () => {
+    if (!pendingBroadcast) return;
+
+    setLoading(true);
+    setError(null);
+    setCurrentBroadcast(null);
+    setBroadcastStatus(null);
+    setShowConfirmDialog(false);
+
+    try {
+      const command: CreateBroadcastCommand = {
+        message: pendingBroadcast.message,
+        message_type: pendingBroadcast.type,
+        selected_external_users: pendingBroadcast.users,
+      };
+
+      const response = await broadcastApi.create(command);
+      setCurrentBroadcast(response);
+      setMessage('');
+      // Обновляем историю после создания новой рассылки
+      loadBroadcastHistory();
+    } catch (err) {
+      setError('Ошибка при создании рассылки. Попробуйте позже.');
+      console.error('Broadcast error:', err);
+    } finally {
+      setLoading(false);
+      setPendingBroadcast(null);
+    }
+  };
 
   const getStatusIcon = (status: BroadcastStatus) => {
     switch (status) {
@@ -372,16 +446,63 @@ const Broadcast: React.FC = () => {
                 <input
                   type="radio"
                   value="external"
-                  checked={true}
-                  disabled={true}
+                  checked={!useManualIds}
+                  onChange={() => setUseManualIds(false)}
                   className="mr-2"
+                  disabled={loading || !!currentBroadcast}
                 />
                 <span className="text-sm text-gray-700">
                   Пользователи (с завершенными анкетами)
                 </span>
               </label>
+              <label className="flex items-center">
+                <input
+                  type="radio"
+                  value="manual"
+                  checked={useManualIds}
+                  onChange={() => setUseManualIds(true)}
+                  className="mr-2"
+                  disabled={loading || !!currentBroadcast}
+                />
+                <span className="text-sm text-gray-700">
+                  Ввести ID вручную
+                </span>
+              </label>
             </div>
           </div>
+
+          {/* Поле для ручного ввода ID */}
+          {useManualIds && (
+            <div className="mb-4">
+              <label htmlFor="manualUserIds" className="block text-sm font-medium text-gray-700 mb-2">
+                ID пользователей
+              </label>
+              <textarea
+                id="manualUserIds"
+                value={manualUserIds}
+                onChange={(e) => handleManualIdsChange(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                rows={3}
+                placeholder="Введите ID пользователей через запятую, пробел или с новой строки:&#10;12345, 67890&#10;11111 22222&#10;33333"
+                disabled={loading || !!currentBroadcast}
+              />
+              <div className="mt-1 text-sm text-gray-500">
+                Найдено ID: {getManualUserIdsCount()}
+                {getManualUserIdsCount() > 0 && (
+                  <span className="ml-2 text-green-600">
+                    ✓ {parseManualUserIds(manualUserIds).join(', ')}
+                  </span>
+                )}
+                {getManualUserIdsCount() > 0 && (
+                  <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded">
+                    <p className="text-sm text-green-800">
+                      <strong>🔒 Безопасно:</strong> Рассылка будет отправлена только указанным {getManualUserIdsCount()} пользователям
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* ЗАКОММЕНТИРОВАНО: Чекбокс для локальных пользователей без Telegram ID
           {userSource === 'local' || userSource === 'both' ? (
@@ -403,20 +524,21 @@ const Broadcast: React.FC = () => {
           */}
 
           {/* Выбор пользователей */}
-          <div className="mb-4">
-            <div className="flex items-center justify-between mb-2">
-              <label className="block text-sm font-medium text-gray-700">
-                Выбор пользователей для рассылки
-              </label>
-              <button
-                type="button"
-                onClick={() => setShowUserSelection(!showUserSelection)}
-                className="text-sm text-blue-600 hover:text-blue-800"
-                disabled={loading || !!currentBroadcast}
-              >
-                {showUserSelection ? 'Скрыть' : 'Показать'} выбор
-              </button>
-            </div>
+          {!useManualIds && (
+            <div className="mb-4">
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-gray-700">
+                  Выбор пользователей для рассылки
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setShowUserSelection(!showUserSelection)}
+                  className="text-sm text-blue-600 hover:text-blue-800"
+                  disabled={loading || !!currentBroadcast}
+                >
+                  {showUserSelection ? 'Скрыть' : 'Показать'} выбор
+                </button>
+              </div>
             
             {showUserSelection && (
               <div className="border border-gray-300 rounded-md p-4 bg-gray-50">
@@ -432,6 +554,14 @@ const Broadcast: React.FC = () => {
                       disabled={externalUsersLoading}
                     >
                       Выбрать всех
+                    </button>
+                    <button
+                      type="button"
+                      onClick={selectSelectedUsers}
+                      className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded hover:bg-green-200"
+                      disabled={externalUsersLoading}
+                    >
+                      Выбрать отобранных
                     </button>
                     <button
                       type="button"
@@ -541,7 +671,8 @@ const Broadcast: React.FC = () => {
                 )}
               </div>
             )}
-          </div>
+            </div>
+          )}
 
           {error && (
             <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
@@ -573,8 +704,11 @@ const Broadcast: React.FC = () => {
             </div>
             
             <div className="text-sm text-gray-600 space-y-1">
-              <p><strong>Создать рассылку:</strong> Отправка произвольного сообщения всем пользователям</p>
+              <p><strong>Создать рассылку:</strong> Отправка произвольного сообщения выбранным пользователям</p>
               <p><strong>Рассылка о записи:</strong> Отправка уведомления о возможности записи на собеседование с кнопкой записи</p>
+              {useManualIds && (
+                <p className="text-blue-600"><strong>Ручной ввод ID:</strong> Рассылка будет отправлена только указанным пользователям</p>
+              )}
             </div>
 
             {currentBroadcast && currentBroadcast.status === 'pending' && (
@@ -844,6 +978,76 @@ const Broadcast: React.FC = () => {
           isOpen={isProfileOpen}
           onClose={handleCloseProfile}
         />
+      )}
+
+      {/* Confirmation Dialog */}
+      {showConfirmDialog && pendingBroadcast && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <div className="flex items-center mb-4">
+              <AlertCircle className="h-6 w-6 text-orange-500 mr-3" />
+              <h3 className="text-lg font-semibold text-gray-900">
+                Подтверждение рассылки
+              </h3>
+            </div>
+            
+            <div className="mb-4">
+              <p className="text-sm text-gray-600 mb-3">
+                <strong>Тип рассылки:</strong> {pendingBroadcast.type === 'custom' ? 'Произвольное сообщение' : 'Рассылка о записи'}
+              </p>
+              
+              <p className="text-sm text-gray-600 mb-3">
+                <strong>Количество получателей:</strong> {pendingBroadcast.users.length}
+              </p>
+              
+              {pendingBroadcast.users.length > 0 && (
+                <div className="mb-3">
+                  <p className="text-sm text-gray-600 mb-2"><strong>ID получателей:</strong></p>
+                  <div className="bg-gray-50 p-2 rounded text-xs font-mono max-h-20 overflow-y-auto">
+                    {pendingBroadcast.users.join(', ')}
+                  </div>
+                </div>
+              )}
+              
+              {pendingBroadcast.users.length === 0 && (
+                <div className="mb-3 p-3 bg-yellow-50 border border-yellow-200 rounded">
+                  <p className="text-sm text-yellow-800">
+                    <strong>⚠️ Внимание:</strong> Рассылка будет отправлена ВСЕМ пользователям в системе!
+                  </p>
+                </div>
+              )}
+              
+              {pendingBroadcast.type === 'custom' && (
+                <div className="mb-3">
+                  <p className="text-sm text-gray-600 mb-2"><strong>Сообщение:</strong></p>
+                  <div className="bg-gray-50 p-2 rounded text-sm max-h-20 overflow-y-auto">
+                    {pendingBroadcast.message}
+                  </div>
+                </div>
+              )}
+            </div>
+            
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => {
+                  setShowConfirmDialog(false);
+                  setPendingBroadcast(null);
+                }}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
+                disabled={loading}
+              >
+                Отмена
+              </button>
+              <button
+                onClick={executeBroadcast}
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:opacity-50"
+                disabled={loading}
+              >
+                {loading ? 'Создание...' : 'Подтвердить рассылку'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
