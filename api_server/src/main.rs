@@ -1,5 +1,5 @@
 use axum::{
-    extract::{State, Path},
+    extract::{State, Path, Multipart},
     routing::{get, post, put, delete},
     Router,
     Json,
@@ -21,9 +21,12 @@ use core_logic::{
     Vote, CreateVoteRequest, VoteResponse, NextSurveyResponse, SurveyVoteSummary,
     // Auth structures
     TelegramAuth, AuthResponse, UpdateVoteRequest,
+    // File upload structures
+    FileUploadResponse,
 };
 use core_logic::RabbitMQClient;
 use sqlx::SqlitePool;
+mod upload;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 use tower_http::cors::{CorsLayer, Any};
@@ -34,6 +37,7 @@ use serde_json::Error as JsonError;
 struct AppState {
     pool: SqlitePool,
     rabbitmq: Arc<RabbitMQClient>,
+    bot: teloxide::Bot,
 }
 
 // Middleware для обработки ошибок JSON
@@ -99,7 +103,11 @@ async fn main() {
     // Инициализируем RabbitMQ клиент
     let rabbitmq = Arc::new(RabbitMQClient::new().await.expect("Failed to initialize RabbitMQ"));
 
-    let state = AppState { pool, rabbitmq };
+    // Инициализируем Telegram Bot
+    let bot_token = std::env::var("TELOXIDE_TOKEN").expect("TELOXIDE_TOKEN not found");
+    let bot = teloxide::Bot::new(bot_token);
+
+    let state = AppState { pool, rabbitmq, bot };
 
     // Настройка CORS
     let cors = CorsLayer::new()
@@ -128,6 +136,7 @@ async fn main() {
         .route("/broadcast/{id}/messages", get(get_broadcast_messages))
         .route("/broadcast/{id}/retry", post(retry_broadcast_message))
         .route("/broadcast/{id}/cancel", post(cancel_broadcast))
+        .route("/upload", post(upload::upload_file))
         // Voting system endpoints
         .route("/surveys/next", get(get_next_survey))
         .route("/surveys/{id}/vote", post(create_vote))

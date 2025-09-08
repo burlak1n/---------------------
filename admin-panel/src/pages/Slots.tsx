@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, Calendar, MapPin, Users, Edit, Trash2 } from 'lucide-react';
-import { slotsApi } from '../api';
-import type { Slot, CreateSlotRequest, UpdateSlotRequest } from '../types';
-import { format } from 'date-fns';
+import { Plus, Calendar, MapPin, Users, Edit, Trash2, Eye, EyeOff, Copy, Check } from 'lucide-react';
+import { slotsApi, bookingsApi } from '../api';
+import type { Slot, CreateSlotRequest, UpdateSlotRequest, BookingRecord } from '../types';
 import { ru } from 'date-fns/locale';
 import { formatTime, utcToLocalInput, localToUTC } from '../utils/timeUtils';
 import TopSlots from '../components/TopSlots';
@@ -16,6 +15,9 @@ const Slots: React.FC = () => {
   const [showAvailableOnly, setShowAvailableOnly] = useState(true);
   const [operationLoading, setOperationLoading] = useState<number | null>(null); // ID слота для операции
   const [topSlotsRefreshTrigger, setTopSlotsRefreshTrigger] = useState(0); // Триггер для обновления топ-слотов
+  const [bookings, setBookings] = useState<BookingRecord[]>([]);
+  const [showUserIds, setShowUserIds] = useState<{ [slotId: number]: boolean }>({});
+  const [copiedSlots, setCopiedSlots] = useState<{ [slotId: number]: boolean }>({});
   const [newSlot, setNewSlot] = useState<CreateSlotRequest>({
     start_time: '',
     place: '',
@@ -42,6 +44,67 @@ const Slots: React.FC = () => {
     });
   };
 
+  // Функция для получения пользователей по слоту
+  const getUsersBySlot = (slotId: number): BookingRecord[] => {
+    return bookings.filter(booking => booking.slot_id === slotId);
+  };
+
+  // Функция для переключения отображения ID пользователей
+  const toggleShowUserIds = (slotId: number) => {
+    setShowUserIds(prev => ({
+      ...prev,
+      [slotId]: !prev[slotId]
+    }));
+  };
+
+  // Функция для копирования ID пользователей
+  const copyUserIds = async (slotId: number) => {
+    const slotBookings = getUsersBySlot(slotId);
+    const userIds = slotBookings.map(booking => booking.telegram_id.toString());
+    const userIdsText = userIds.join(', ');
+    
+    try {
+      await navigator.clipboard.writeText(userIdsText);
+      
+      // Показываем индикатор успешного копирования
+      setCopiedSlots(prev => ({
+        ...prev,
+        [slotId]: true
+      }));
+      
+      // Убираем индикатор через 2 секунды
+      setTimeout(() => {
+        setCopiedSlots(prev => ({
+          ...prev,
+          [slotId]: false
+        }));
+      }, 2000);
+      
+    } catch (err) {
+      console.error('Ошибка при копировании:', err);
+      // Fallback для старых браузеров
+      const textArea = document.createElement('textarea');
+      textArea.value = userIdsText;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+      
+      // Показываем индикатор успешного копирования
+      setCopiedSlots(prev => ({
+        ...prev,
+        [slotId]: true
+      }));
+      
+      setTimeout(() => {
+        setCopiedSlots(prev => ({
+          ...prev,
+          [slotId]: false
+        }));
+      }, 2000);
+    }
+  };
+
   useEffect(() => {
     fetchSlots();
     // Обновляем топ-слоты при изменении фильтра
@@ -50,10 +113,12 @@ const Slots: React.FC = () => {
 
   const fetchSlots = async () => {
     try {
-      const data = showAvailableOnly 
-        ? await slotsApi.getAll()
-        : await slotsApi.getAllSlots();
-      updateSlots(() => data);
+      const [slotsData, bookingsData] = await Promise.all([
+        showAvailableOnly ? slotsApi.getAll() : slotsApi.getAllSlots(),
+        bookingsApi.getAll()
+      ]);
+      updateSlots(() => slotsData);
+      setBookings(bookingsData);
     } catch (error) {
       console.error('Error fetching slots:', error);
     } finally {
@@ -171,8 +236,9 @@ const Slots: React.FC = () => {
     }
     
     // Валидация максимального количества участников
-    if (editSlot.max_users && editSlot.max_users < (editingSlot.booked_count || 0)) {
-      alert(`Нельзя установить максимальное количество участников меньше ${editingSlot.booked_count || 0} (уже записано)`);
+    const currentBookings = getUsersBySlot(editingSlot.id).length;
+    if (editSlot.max_users && editSlot.max_users < currentBookings) {
+      alert(`Нельзя установить максимальное количество участников меньше ${currentBookings} (уже записано)`);
       return;
     }
     
@@ -426,7 +492,7 @@ const Slots: React.FC = () => {
                 <div>Текущее время: {editingSlot.time}</div>
                 <div>Текущее место: {editingSlot.place}</div>
                 <div>Текущий максимум: {editingSlot.max_user}</div>
-                <div>Записано: {editingSlot.booked_count || 0}</div>
+                <div>Записано: {getUsersBySlot(editingSlot.id).length}</div>
               </div>
             )}
             <form onSubmit={handleEditSlot}>
@@ -466,12 +532,12 @@ const Slots: React.FC = () => {
                 />
                 {editingSlot && (
                   <p className="mt-1 text-sm text-gray-500">
-                    Текущее количество записанных: {editingSlot.booked_count || 0}
+                    Текущее количество записанных: {getUsersBySlot(editingSlot.id).length}
                   </p>
                 )}
-                {editingSlot && editSlot.max_users && (editSlot.max_users < (editingSlot.booked_count || 0)) && (
+                {editingSlot && editSlot.max_users && (editSlot.max_users < getUsersBySlot(editingSlot.id).length) && (
                   <p className="mt-1 text-sm text-red-500">
-                    ⚠️ Нельзя установить меньше {editingSlot.booked_count || 0} (уже записано)
+                    ⚠️ Нельзя установить меньше {getUsersBySlot(editingSlot.id).length} (уже записано)
                   </p>
                 )}
               </div>
@@ -517,8 +583,8 @@ const Slots: React.FC = () => {
           {slots.length > 0 && (
             <div className="mt-2 text-sm text-gray-600">
               Всего слотов: {slots.length} | 
-              Заполнено: {slots.filter(s => (s.booked_count || 0) >= s.max_user).length} | 
-              Доступно: {slots.filter(s => (s.booked_count || 0) < s.max_user).length}
+              Заполнено: {slots.filter(s => getUsersBySlot(s.id).length >= s.max_user).length} | 
+              Доступно: {slots.filter(s => getUsersBySlot(s.id).length < s.max_user).length}
             </div>
           )}
         </div>
@@ -528,48 +594,62 @@ const Slots: React.FC = () => {
               {showAvailableOnly ? 'Нет доступных слотов' : 'Слотов не найдено'}
             </div>
           ) : (
-            slots.map((slot) => (
-              <div 
-                key={slot.id} 
-                className="px-6 py-4 hover:bg-gray-50 transition-all duration-200 ease-in-out transform hover:scale-[1.01]"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-4">
-                    <div className="flex items-center text-gray-600">
-                      <Calendar className="h-5 w-5 mr-2" />
-                      <span className="font-medium">
-                        {formatTime(slot.time, 'dd MMMM yyyy, HH:mm', ru)}
-                      </span>
-                    </div>
-                    <div className="flex items-center text-gray-600">
-                      <MapPin className="h-5 w-5 mr-2" />
-                      <span>{slot.place}</span>
-                    </div>
-                    <div className="flex items-center text-gray-600">
-                      <Users className="h-5 w-5 mr-2" />
-                      <span 
-                        className={`font-medium cursor-help ${
-                          (slot.booked_count || 0) >= slot.max_user 
-                            ? 'text-red-600' 
-                            : (slot.booked_count || 0) >= slot.max_user * 0.8 
-                              ? 'text-yellow-600' 
-                              : 'text-green-600'
-                        }`}
-                        title={`Записано: ${slot.booked_count || 0}, Максимум: ${slot.max_user}, Свободно: ${slot.max_user - (slot.booked_count || 0)}`}
-                      >
-                        {slot.booked_count || 0}/{slot.max_user}
-                      </span>
-                    </div>
-                  </div>
+            slots.map((slot) => {
+              const slotBookings = getUsersBySlot(slot.id);
+              const isShowingUserIds = showUserIds[slot.id];
+              
+              return (
+                <div key={slot.id}>
+                  <div 
+                    className="px-6 py-4 hover:bg-gray-50 transition-all duration-200 ease-in-out transform hover:scale-[1.01]"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-4">
+                        <div className="flex items-center text-gray-600">
+                          <Calendar className="h-5 w-5 mr-2" />
+                          <span className="font-medium">
+                            {formatTime(slot.time, 'dd MMMM yyyy, HH:mm', ru)}
+                          </span>
+                        </div>
+                        <div className="flex items-center text-gray-600">
+                          <MapPin className="h-5 w-5 mr-2" />
+                          <span>{slot.place}</span>
+                        </div>
+                        <div className="flex items-center text-gray-600">
+                          <Users className="h-5 w-5 mr-2" />
+                          <span 
+                            className={`font-medium cursor-help ${
+                              slotBookings.length >= slot.max_user 
+                                ? 'text-red-600' 
+                                : slotBookings.length >= slot.max_user * 0.8 
+                                  ? 'text-yellow-600' 
+                                  : 'text-green-600'
+                            }`}
+                            title={`Записано: ${slotBookings.length}, Максимум: ${slot.max_user}, Свободно: ${slot.max_user - slotBookings.length}`}
+                          >
+                            {slotBookings.length}/{slot.max_user}
+                          </span>
+                        </div>
+                        {slotBookings.length > 0 && (
+                          <button
+                            onClick={() => toggleShowUserIds(slot.id)}
+                            className="flex items-center text-blue-600 hover:text-blue-800 text-sm"
+                            title={isShowingUserIds ? "Скрыть ID пользователей" : "Показать ID пользователей"}
+                          >
+                            {isShowingUserIds ? <EyeOff className="h-4 w-4 mr-1" /> : <Eye className="h-4 w-4 mr-1" />}
+                            ID пользователей
+                          </button>
+                        )}
+                      </div>
                   <div className="flex items-center space-x-2">
                     {!showAvailableOnly && (
                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        slot.max_user > (slot.booked_count || 0)
+                        slot.max_user > slotBookings.length
                           ? 'bg-green-100 text-green-800'
                           : 'bg-red-100 text-red-800'
                       }`}>
-                        {slot.max_user > (slot.booked_count || 0) 
-                          ? `Доступен (${slot.max_user - (slot.booked_count || 0)} мест)` 
+                        {slot.max_user > slotBookings.length 
+                          ? `Доступен (${slot.max_user - slotBookings.length} мест)` 
                           : 'Заполнен'}
                       </span>
                     )}
@@ -608,8 +688,53 @@ const Slots: React.FC = () => {
                     </button>
                   </div>
                 </div>
-              </div>
-            ))
+                  </div>
+                  
+                  {/* Отображение ID пользователей */}
+                  {isShowingUserIds && slotBookings.length > 0 && (
+                    <div className="px-6 py-3 bg-gray-50 border-t border-gray-200">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="text-sm text-gray-600">
+                          <strong>ID записанных пользователей ({slotBookings.length}):</strong>
+                        </div>
+                        <button
+                          onClick={() => copyUserIds(slot.id)}
+                          className={`flex items-center px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                            copiedSlots[slot.id]
+                              ? 'bg-green-100 text-green-700 border border-green-200'
+                              : 'bg-blue-100 text-blue-700 hover:bg-blue-200 border border-blue-200'
+                          }`}
+                          title="Копировать ID пользователей"
+                        >
+                          {copiedSlots[slot.id] ? (
+                            <>
+                              <Check className="w-3 h-3 mr-1" />
+                              Скопировано
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3 mr-1" />
+                              Копировать
+                            </>
+                          )}
+                        </button>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {slotBookings.map((booking) => (
+                          <span
+                            key={booking.id}
+                            className="inline-flex items-center px-2 py-1 bg-blue-100 text-blue-800 text-xs font-medium rounded"
+                            title={`Запись #${booking.id}, создана: ${booking.created_at ? new Date(booking.created_at).toLocaleString('ru-RU') : 'неизвестно'}`}
+                          >
+                            {booking.telegram_id}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })
           )}
         </div>
       </div>

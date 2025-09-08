@@ -224,6 +224,7 @@ pub struct BroadcastMessage {
     pub message: String,
     pub broadcast_id: String,
     pub message_type: Option<BroadcastMessageType>,
+    pub media_group: Option<MediaGroup>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -246,6 +247,7 @@ pub enum BroadcastEvent {
         message: String,
         target_users: Vec<User>,
         message_type: Option<BroadcastMessageType>,
+        media_group: Option<MediaGroup>,
         created_at: DateTime<Utc>,
     },
     BroadcastStarted {
@@ -385,6 +387,20 @@ pub struct CreateBroadcastCommand {
     pub message: String,
     pub message_type: Option<BroadcastMessageType>,
     pub selected_external_users: Option<Vec<String>>, // telegram_id выбранных внешних пользователей
+    pub media_group: Option<MediaGroup>, // Группа медиафайлов для отправки
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct MediaGroup {
+    pub media: Vec<MediaItem>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct MediaItem {
+    pub media_type: String, // "photo", "video", "document", "audio", "voice"
+    pub file_id: Option<String>, // ID файла в Telegram
+    pub file_path: Option<String>, // Путь к файлу
+    pub caption: Option<String>, // Подпись к медиафайлу
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
@@ -560,4 +576,12 @@ pub struct AuthResponse {
     pub message: String,
     pub user_profile: Option<UserProfile>,
     pub user_role: Option<i32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct FileUploadResponse {
+    pub success: bool,
+    pub message: String,
+    pub file_id: Option<String>,
+    pub file_type: Option<String>,
 }

@@ -74,20 +74,26 @@ const UserProfile: React.FC<UserProfileProps> = ({ telegramId, isOpen, onClose }
               {/* Основная информация */}
               <div className="bg-white border border-gray-200 rounded-lg p-3 pl-2 shadow-sm">
                 <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-lg font-semibold text-gray-900">{survey.full_name}</h3>
+                  <h3 className="text-lg font-semibold text-gray-900">
+                    {survey.data?.full_name || survey.full_name}
+                  </h3>
                   <div className="text-xs text-gray-400 space-x-2">
                     <span>ID: {survey.telegram_id}</span>
                   </div>
                 </div>
                 <div className="space-y-2 text-sm text-gray-600">
-                  <div><span className="text-gray-500 font-medium">Факультет:</span> {survey.faculty}</div>
-                  <div><span className="text-gray-500 font-medium">Группа:</span> {survey.group}</div>
+                  <div>
+                    <span className="text-gray-500 font-medium">Факультет:</span> {survey.data?.faculty || survey.faculty}
+                  </div>
+                  <div>
+                    <span className="text-gray-500 font-medium">Группа:</span> {survey.data?.group || survey.group}
+                  </div>
                   <div className="flex flex-wrap gap-4">
                     <a 
-                      href={`tel:${survey.phone}`} 
+                      href={`tel:${survey.data?.phone || survey.phone}`} 
                       className="text-blue-600 hover:text-blue-800 hover:underline transition-colors"
                     >
-                      {survey.phone}
+                      {survey.data?.phone || survey.phone}
                     </a>
                     {survey.email && (
                       <>

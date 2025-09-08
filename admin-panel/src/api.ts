@@ -51,7 +51,7 @@ const getExternalApiUrl = () => {
   
   // Продакшен - используем тот же домен
   if (hostname === 'admin.ingroupsts.ru') {
-    return 'http://localhost:3001';
+    return 'https://admin.ingroupsts.ru';
   }
   
   // Fallback для других случаев
@@ -154,6 +154,16 @@ export const bookingsApi = {
   },
   delete: async (id: number): Promise<void> => {
     await api.delete(`/bookings/${id}`);
+  },
+  // Получение пользователей записанных на конкретный слот
+  getUsersBySlot: async (slotId: number): Promise<BookingRecord[]> => {
+    const response = await api.get<BookingRecord[]>(`/bookings/slot/${slotId}`);
+    return response.data;
+  },
+  // Получение всех записей сгруппированных по слотам
+  getBookingsBySlots: async (): Promise<{[slotId: number]: BookingRecord[]}> => {
+    const response = await api.get<{[slotId: number]: BookingRecord[]}>('/bookings/by-slots');
+    return response.data;
   },
 };
 
@@ -397,6 +407,7 @@ export const externalUsersApi = {
     }
   },
 
+
   // Переключение режима работы
   toggleLocalMode: (useLocal: boolean, mode: 'json' | 'debug' = 'json') => {
     externalUsersApi.useLocalMode = useLocal;
@@ -466,7 +477,7 @@ export const externalUsersApi = {
     }
 
     try {
-      const response = await externalApi.get<SurveyStatistics>('/api/survey/stats');
+      const response = await externalApi.get<SurveyStatistics>('/survey/stats');
       return response.data;
     } catch (error: any) {
       console.error('Error fetching survey statistics:', error);
@@ -495,7 +506,7 @@ export const externalUsersApi = {
     }
 
     try {
-      await externalApi.get('/api/users/completed');
+      await externalApi.get('/external-users');
       return true;
     } catch {
       return false;

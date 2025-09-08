@@ -29,7 +29,7 @@ const Bookings: React.FC = () => {
     try {
       const [bookingsData, slotsData] = await Promise.all([
         bookingsApi.getAll(),
-        slotsApi.getAll(),
+        slotsApi.getAllSlots(), // Используем getAllSlots() для получения всех слотов
       ]);
 
       // Объединяем данные

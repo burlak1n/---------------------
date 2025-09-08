@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { Users, RefreshCw, AlertCircle, CheckCircle, Clock, Download, Filter, Eye, Calendar, FileText, Search } from 'lucide-react';
-import { externalUsersApi } from '../api';
-import type { ExternalUser, BookingRecord } from '../types';
+import { externalUsersApi, slotsApi } from '../api';
+import type { ExternalUser, BookingRecord, Slot } from '../types';
 import UserProfile from '../components/UserProfile';
 import SurveyOverview from '../components/SurveyOverview';
 
 const ExternalUsers: React.FC = () => {
   const [users, setUsers] = useState<ExternalUser[]>([]);
   const [bookings, setBookings] = useState<BookingRecord[]>([]);
+  const [slots, setSlots] = useState<Slot[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [apiHealth, setApiHealth] = useState<boolean | null>(null);
@@ -15,6 +16,7 @@ const ExternalUsers: React.FC = () => {
   const [useCache, setUseCache] = useState(true);
   const [filterSurvey, setFilterSurvey] = useState<string>('');
   const [filterBooking, setFilterBooking] = useState<string>('all');
+  const [filterSlot, setFilterSlot] = useState<string>('all');
   const [searchName, setSearchName] = useState<string>('');
   const [useLocalMode, setUseLocalMode] = useState(false);
   const [localMode, setLocalMode] = useState<'json' | 'debug'>('json');
@@ -33,6 +35,7 @@ const ExternalUsers: React.FC = () => {
     checkApiHealth();
     fetchUsers();
     fetchBookings();
+    fetchSlots();
     // Загружаем статистику анкеты в любом режиме
     loadSurveyStats();
   }, [useLocalMode, localMode]);
@@ -130,15 +133,25 @@ const ExternalUsers: React.FC = () => {
     }
   };
 
+  const fetchSlots = async () => {
+    try {
+      const data = await slotsApi.getAllSlots();
+      setSlots(data);
+    } catch (err: any) {
+      console.error('Error fetching slots:', err);
+    }
+  };
+
   const handleRefresh = async () => {
     externalUsersApi.clearCache();
-    await Promise.all([fetchUsers(), fetchBookings()]);
+    await Promise.all([fetchUsers(), fetchBookings(), fetchSlots()]);
   };
 
   const clearAllFilters = () => {
     setSearchName('');
     setFilterSurvey('');
     setFilterBooking('all');
+    setFilterSlot('all');
   };
 
   // Проверяем, есть ли запись у пользователя
@@ -146,19 +159,55 @@ const ExternalUsers: React.FC = () => {
     return bookings.some(booking => booking.telegram_id === telegramId);
   };
 
+  // Получаем слот пользователя
+  const getUserSlot = (telegramId: number): Slot | null => {
+    const userBooking = bookings.find(booking => booking.telegram_id === telegramId);
+    if (!userBooking || !userBooking.slot_id) return null;
+    return slots.find(slot => slot.id === userBooking.slot_id) || null;
+  };
+
   const handleExportData = () => {
+    // Используем отфильтрованных пользователей вместо всех
+    const usersToExport = filteredUsers;
+    
+    // Получаем информацию о слотах для экспорта
     const csvContent = [
-      'Full Name,Phone,Username,Faculty,Group,Completed At,Telegram ID',
-      ...users.map(user => 
-        `"${user.full_name}","${user.phone}",@${user.username},"${user.faculty}","${user.group}","${user.completed_at}",${user.telegram_id}`
-      )
+      'Full Name,Phone,Username,Faculty,Group,Completed At,Telegram ID,Booking Status,Slot Date,Slot Place',
+      ...usersToExport.map(user => {
+        const userSlot = getUserSlot(user.telegram_id);
+        const bookingStatus = hasBooking(user.telegram_id) ? 'Записан' : 'Не записан';
+        const slotDate = userSlot ? new Date(userSlot.time).toLocaleDateString('ru-RU') : '';
+        const slotPlace = userSlot ? userSlot.place : '';
+        
+        return `"${user.full_name}","${user.phone}",@${user.username},"${user.faculty}","${user.group}","${user.completed_at}",${user.telegram_id},"${bookingStatus}","${slotDate}","${slotPlace}"`;
+      })
     ].join('\n');
+
+    // Создаем имя файла с информацией о фильтрах
+    const filterInfo = [];
+    if (searchName) filterInfo.push(`search_${searchName}`);
+    if (filterSurvey) filterInfo.push(`faculty_${filterSurvey}`);
+    if (filterBooking !== 'all') filterInfo.push(`booking_${filterBooking}`);
+    if (filterSlot !== 'all') {
+      if (filterSlot === 'not_booked') {
+        filterInfo.push('not_booked');
+      } else {
+        const selectedSlot = slots.find(slot => slot.id.toString() === filterSlot);
+        if (selectedSlot) {
+          filterInfo.push(`slot_${new Date(selectedSlot.time).toLocaleDateString('ru-RU').replace(/\./g, '-')}`);
+        }
+      }
+    }
+    
+    const fileName = filterInfo.length > 0 
+      ? `external_users_filtered_${filterInfo.join('_')}_${new Date().toISOString().split('T')[0]}.csv`
+      : `external_users_all_${new Date().toISOString().split('T')[0]}.csv`;
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
     link.setAttribute('href', url);
-    link.setAttribute('download', `external_users_${new Date().toISOString().split('T')[0]}.csv`);
+    link.setAttribute('download', fileName);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
@@ -184,11 +233,16 @@ const ExternalUsers: React.FC = () => {
       (filterBooking === 'booked' && hasBooking(user.telegram_id)) ||
       (filterBooking === 'not_booked' && !hasBooking(user.telegram_id));
     
+    const matchesSlot = filterSlot === 'all' || 
+      (filterSlot === 'not_booked' && !hasBooking(user.telegram_id)) ||
+      (filterSlot !== 'not_booked' && filterSlot !== 'all' && hasBooking(user.telegram_id) && getUserSlot(user.telegram_id)?.id.toString() === filterSlot);
+    
     const matchesName = !searchName || 
       user.full_name.toLowerCase().includes(searchName.toLowerCase()) ||
-      user.username.toLowerCase().includes(searchName.toLowerCase());
+      user.username.toLowerCase().includes(searchName.toLowerCase()) ||
+      user.telegram_id.toString().includes(searchName);
     
-    return matchesSurvey && matchesBooking && matchesName;
+    return matchesSurvey && matchesBooking && matchesSlot && matchesName;
   });
 
   // Логируем первые несколько пользователей для отладки
@@ -214,7 +268,7 @@ const ExternalUsers: React.FC = () => {
         </div>
         {searchName && (
           <div className="mt-2 text-sm text-blue-600">
-            🔍 Поиск по ФИО и username работает в реальном времени
+            🔍 Поиск по ФИО, username и Telegram ID работает в реальном времени
           </div>
         )}
       </div>
@@ -234,16 +288,19 @@ const ExternalUsers: React.FC = () => {
           </p>
         </div>
         <div className="flex items-center space-x-3">
-          {useLocalMode && (
-            <button
-              onClick={handleExportData}
-              className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500"
-              title="Экспорт данных (CSV)"
-            >
-              <Download className="mr-2 h-4 w-4" />
-              Экспорт данных
-            </button>
-          )}
+          <button
+            onClick={handleExportData}
+            className={`flex items-center px-4 py-2 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 ${
+              filteredUsers.length === 0
+                ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
+                : 'bg-green-600 text-white hover:bg-green-700'
+            }`}
+            title={`Экспорт отфильтрованных данных (CSV) - ${filteredUsers.length} пользователей`}
+            disabled={filteredUsers.length === 0}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            Экспорт ({filteredUsers.length})
+          </button>
           <button
             onClick={() => setIsSurveyOverviewOpen(true)}
             className="flex items-center px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500"
@@ -388,7 +445,7 @@ const ExternalUsers: React.FC = () => {
             <div className="relative">
               <input
                 type="text"
-                placeholder="Поиск по ФИО или username..."
+                placeholder="Поиск по ФИО, username или Telegram ID..."
                 value={searchName}
                 onChange={(e) => setSearchName(e.target.value)}
                 className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-64 pr-10"
@@ -429,7 +486,23 @@ const ExternalUsers: React.FC = () => {
               <option value="not_booked">Только не записанные</option>
             </select>
           </div>
-          {(searchName || filterSurvey || filterBooking !== 'all') && (
+          <div className="flex items-center space-x-2">
+            <Filter className="h-4 w-4 text-gray-500" />
+            <select
+              value={filterSlot}
+              onChange={(e) => setFilterSlot(e.target.value)}
+              className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="all">Все слоты</option>
+              <option value="not_booked">Не записанные</option>
+              {slots.map(slot => (
+                <option key={slot.id} value={slot.id.toString()}>
+                  {new Date(slot.time).toLocaleDateString('ru-RU')} - {slot.place}
+                </option>
+              ))}
+            </select>
+          </div>
+          {(searchName || filterSurvey || filterBooking !== 'all' || filterSlot !== 'all') && (
             <button
               onClick={clearAllFilters}
               className="px-3 py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
@@ -540,9 +613,16 @@ const ExternalUsers: React.FC = () => {
                   {/* Статус записи */}
                   <div className="col-span-1 text-center">
                     {hasBooking(user.telegram_id) ? (
-                      <div className="flex items-center justify-center text-green-600">
-                        <Calendar className="h-4 w-4 mr-1" />
-                        <span className="text-xs font-medium">Записан</span>
+                      <div className="flex flex-col items-center text-green-600">
+                        <div className="flex items-center">
+                          <Calendar className="h-4 w-4 mr-1" />
+                          <span className="text-xs font-medium">Записан</span>
+                        </div>
+                        {getUserSlot(user.telegram_id) && (
+                          <div className="text-xs text-gray-500 mt-1">
+                            {new Date(getUserSlot(user.telegram_id)!.time).toLocaleDateString('ru-RU')}
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <div className="text-xs text-gray-400">-</div>

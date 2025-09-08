@@ -326,6 +326,7 @@ pub async fn get_user_survey_from_external_api(telegram_id: i64) -> Result<Optio
     
     if response.status().is_success() {
         let survey_data: serde_json::Value = response.json().await?;
+        println!("🔍 Получены данные анкеты {}: {:?}", telegram_id, survey_data);
         // Сохраняем в кеш
         cache.set_survey(telegram_id, survey_data.clone()).await;
         Ok(Some(survey_data))
@@ -429,7 +430,12 @@ pub async fn get_user_by_telegram_id(_pool: &SqlitePool, telegram_id: i64) -> Re
     let user_url = format!("{}/user/{}", api_base_url, telegram_id);
     
     // Делаем запрос к внешнему API для получения профиля пользователя
-    match reqwest::get(&user_url).await {
+    let client = reqwest::Client::new();
+    match client
+        .get(&user_url)
+        .header("X-Forwarded-For", "127.0.0.1")
+        .send()
+        .await {
         Ok(response) => {
             if response.status().is_success() {
                 match response.json::<ExternalUserResponse>().await {
@@ -1118,6 +1124,7 @@ pub async fn handle_create_broadcast(
         message: command.message.clone(),
         target_users: users.clone(),
         message_type: command.message_type.clone(),
+        media_group: command.media_group.clone(),
         created_at: chrono::Utc::now(),
     };
     
@@ -1523,7 +1530,12 @@ pub async fn get_user_survey_data(_pool: &SqlitePool, survey_id: i64) -> Result<
     let survey_url = format!("{}/api/users/{}/survey", api_base_url, survey_id);
     
     // Делаем запрос к внешнему API
-    match reqwest::get(&survey_url).await {
+    let client = reqwest::Client::new();
+    match client
+        .get(&survey_url)
+        .header("X-Forwarded-For", "127.0.0.1")
+        .send()
+        .await {
         Ok(response) => {
             if response.status().is_success() {
                 match response.json::<UserSurvey>().await {
@@ -1553,7 +1565,12 @@ pub async fn sync_users_from_external_api(pool: &SqlitePool) -> Result<Vec<i64>,
     let users_url = format!("{}/api/users/completed", api_base_url);
     
     // Делаем запрос к внешнему API для получения списка пользователей
-    let response = reqwest::get(&users_url).await?;
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&users_url)
+        .header("X-Forwarded-For", "127.0.0.1")
+        .send()
+        .await?;
     
     if !response.status().is_success() {
         return Err(format!("Ошибка получения пользователей: HTTP {}", response.status()).into());
@@ -1933,7 +1950,12 @@ pub async fn authenticate_user(telegram_auth: TelegramAuth) -> Result<AuthRespon
     println!("🌐 URL запроса: {}", user_url);
     
     // Делаем запрос к внешнему API для получения профиля пользователя
-    match reqwest::get(&user_url).await {
+    let client = reqwest::Client::new();
+    match client
+        .get(&user_url)
+        .header("X-Forwarded-For", "127.0.0.1")
+        .send()
+        .await {
         Ok(response) => {
             if response.status().is_success() {
                 match response.json::<ExternalUserResponse>().await {

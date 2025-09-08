@@ -50,7 +50,7 @@ async fn handle_broadcast_event(
     info!("Event type: {:?}", event);
 
     match event {
-        BroadcastEvent::BroadcastCreated { broadcast_id, message, target_users, message_type, created_at } => {
+        BroadcastEvent::BroadcastCreated { broadcast_id, message, target_users, message_type, media_group, created_at } => {
             info!("Processing BroadcastCreated event for broadcast: {}", broadcast_id);
             
             // Используем переданных пользователей
@@ -63,13 +63,16 @@ async fn handle_broadcast_event(
 
             // Создаем сообщения для каждого пользователя
             for user in users {
+                info!("Creating BroadcastMessage for user {} with media_group: {:?}", user.telegram_id, media_group);
                 let message_record = BroadcastMessage {
                     broadcast_id: broadcast_id.clone(),
                     telegram_id: user.telegram_id,
                     message: message.clone(),
                     message_type: message_type.clone(),
+                    media_group: media_group.clone(),
                     created_at,
                 };
+                info!("BroadcastMessage created: has_media_group={}", message_record.media_group.is_some());
 
                 // Создаем запись сообщения в БД
                 let message_db_record = core_logic::BroadcastMessageRecord {

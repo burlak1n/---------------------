@@ -75,6 +75,19 @@ export interface CreateBroadcastCommand {
   message: string;
   message_type?: 'custom' | 'signup';
   selected_external_users?: string[]; // telegram_id выбранных внешних пользователей
+  selected_slot_ids?: number[]; // ID слотов для выбора пользователей
+  media_group?: MediaGroup; // Группа медиафайлов для отправки
+}
+
+export interface MediaGroup {
+  media: MediaItem[];
+}
+
+export interface MediaItem {
+  media_type: 'photo' | 'video' | 'document' | 'audio' | 'voice';
+  file_id?: string; // ID файла в Telegram
+  file_path?: string; // Путь к файлу
+  caption?: string; // Подпись к медиафайлу
 }
 
 export interface BroadcastCreatedResponse {
@@ -137,6 +150,26 @@ export interface ExternalUser {
     retry_count: number;
     broadcast_created_at: string;
   };
+  // Новый формат данных анкеты (опционально для обратной совместимости)
+  data?: {
+    full_name: string;
+    faculty: string;
+    group: string;
+    phone: string;
+    q1?: string;
+    q2?: string[];
+    q3?: string;
+    q4?: string;
+    q5?: string;
+    q6?: string;
+    q7?: string;
+    q8?: string;
+    q9?: string;
+  };
+  completion_time_seconds?: number;
+  status?: string | null;
+  score?: number | null;
+  feedback?: string | null;
 }
 
 // Тип для API no-response-users (только telegram_id и message_info)
@@ -172,20 +205,26 @@ export interface UserSurvey {
   skills?: string[];
   interests?: string[];
   completed_at: string;
-  // Прямые поля для вопросов
-  q5?: string;
-  q6?: string;
-  q7?: string;
-  q8?: string;
-  q9?: string;
-  survey_data?: {
+  // Новый формат данных анкеты
+  data: {
+    full_name: string;
+    faculty: string;
+    group: string;
+    phone: string;
     q1?: string;
+    q2?: string[];
+    q3?: string;
+    q4?: string;
+    q5?: string;
+    q6?: string;
+    q7?: string;
+    q8?: string;
     q9?: string; // JSON строка с данными рисунка
-    completion_time_seconds?: number;
-    survey_id?: string;
-    username?: string;
-    request_id?: string;
   };
+  completion_time_seconds?: number;
+  status?: string | null;
+  score?: number | null;
+  feedback?: string | null;
 }
 
 // Survey Structure Types

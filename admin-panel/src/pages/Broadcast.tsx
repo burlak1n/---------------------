@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Send, Users, MessageCircle, AlertCircle, RefreshCw, X, CheckCircle, Clock, AlertTriangle, Eye } from 'lucide-react';
-import { broadcastApi, externalUsersApi } from '../api';
+import { Send, Users, MessageCircle, AlertCircle, RefreshCw, X, CheckCircle, Clock, AlertTriangle, Eye, Upload, Image, Video, File, Music, Mic } from 'lucide-react';
+import { broadcastApi, externalUsersApi, slotsApi, bookingsApi } from '../api';
 import type { 
   CreateBroadcastCommand, 
   BroadcastCreatedResponse, 
@@ -8,7 +8,10 @@ import type {
   BroadcastStatus,
   MessageStatus,
   BroadcastSummary,
-  ExternalUser
+  ExternalUser,
+  MediaItem,
+  Slot,
+  BookingRecord
 } from '../types';
 import UserProfile from '../components/UserProfile';
 
@@ -30,6 +33,13 @@ const Broadcast: React.FC = () => {
   const [externalUsersLoading, setExternalUsersLoading] = useState(false);
   const [selectedExternalUsers, setSelectedExternalUsers] = useState<string[]>([]);
 
+  // Состояние для выбора по слотам
+  const [slots, setSlots] = useState<Slot[]>([]);
+  const [slotsLoading, setSlotsLoading] = useState(false);
+  const [selectedSlotIds, setSelectedSlotIds] = useState<number[]>([]);
+  const [useSlotSelection, setUseSlotSelection] = useState(false);
+  const [bookings, setBookings] = useState<BookingRecord[]>([]);
+
   // Состояние для ручного ввода ID
   const [manualUserIds, setManualUserIds] = useState('');
   const [useManualIds, setUseManualIds] = useState(false);
@@ -45,6 +55,10 @@ const Broadcast: React.FC = () => {
   // Состояние для профиля пользователя
   const [selectedUserProfile, setSelectedUserProfile] = useState<number | null>(null);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
+
+  // Состояние для медиафайлов
+  const [mediaFiles, setMediaFiles] = useState<MediaItem[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
 
   // Очистка интервала при размонтировании
   useEffect(() => {
@@ -100,6 +114,11 @@ const Broadcast: React.FC = () => {
     loadUsers();
   }, []);
 
+  // Загрузка слотов и записей
+  useEffect(() => {
+    loadSlotsAndBookings();
+  }, []);
+
   const loadBroadcastHistory = async () => {
     setHistoryLoading(true);
     try {
@@ -129,6 +148,37 @@ const Broadcast: React.FC = () => {
     }
   };
 
+  const loadSlotsAndBookings = async () => {
+    setSlotsLoading(true);
+    
+    try {
+      // Загружаем слоты и записи параллельно
+      const [slotsData, bookingsData] = await Promise.all([
+        slotsApi.getAllSlots(), // Получаем все слоты, включая занятые
+        bookingsApi.getAll()
+      ]);
+      
+      setSlots(slotsData);
+      setBookings(bookingsData);
+    } catch (err) {
+      console.error('Failed to load slots and bookings:', err);
+    } finally {
+      setSlotsLoading(false);
+    }
+  };
+
+  // Получение пользователей по выбранным слотам
+  const getUsersBySelectedSlots = (): string[] => {
+    if (selectedSlotIds.length === 0) return [];
+    
+    const userIds = bookings
+      .filter(booking => selectedSlotIds.includes(booking.slot_id || 0))
+      .map(booking => booking.telegram_id.toString());
+    
+    // Убираем дубликаты
+    return [...new Set(userIds)];
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!message.trim()) {
@@ -149,9 +199,10 @@ const Broadcast: React.FC = () => {
         setError('Не найдено ни одного валидного ID пользователя');
         return;
       }
-    } else if (selectedExternalUsers.length > 0) {
-      // Используем выбранных пользователей
-      usersForBroadcast = selectedExternalUsers;
+    } else {
+      // Объединяем выбранных пользователей и пользователей из слотов
+      const slotUsers = getUsersBySelectedSlots();
+      usersForBroadcast = [...new Set([...selectedExternalUsers, ...slotUsers])];
     }
     // Если usersForBroadcast пустой, рассылка будет всем (но это не ручной режим)
 
@@ -173,9 +224,10 @@ const Broadcast: React.FC = () => {
         setError('Не найдено ни одного валидного ID пользователя');
         return;
       }
-    } else if (selectedExternalUsers.length > 0) {
-      // Используем выбранных пользователей
-      usersForBroadcast = selectedExternalUsers;
+    } else {
+      // Объединяем выбранных пользователей и пользователей из слотов
+      const slotUsers = getUsersBySelectedSlots();
+      usersForBroadcast = [...new Set([...selectedExternalUsers, ...slotUsers])];
     }
     // Если usersForBroadcast пустой, рассылка будет всем (но это не ручной режим)
 
@@ -224,6 +276,103 @@ const Broadcast: React.FC = () => {
   const handleCloseProfile = () => {
     setIsProfileOpen(false);
     setSelectedUserProfile(null);
+  };
+
+  // Функции для работы с медиафайлами
+  const getFileType = (file: File): MediaItem['media_type'] => {
+    if (file.type.startsWith('image/')) return 'photo';
+    if (file.type.startsWith('video/')) return 'video';
+    if (file.type.startsWith('audio/')) return 'audio';
+    return 'document';
+  };
+
+  const handleFileUpload = async (files: FileList | null) => {
+    if (!files) return;
+    
+    setError('');
+    setLoading(true);
+    
+    try {
+      const uploadPromises = Array.from(files).map(async (file) => {
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        const response = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData,
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Failed to upload ${file.name}`);
+        }
+        
+        const result = await response.json();
+        if (!result.success) {
+          throw new Error(result.message || `Failed to upload ${file.name}`);
+        }
+        
+        return {
+          media_type: getFileType(file),
+          file_id: result.file_id,
+          file_path: file.name,
+          caption: ''
+        } as MediaItem;
+      });
+      
+      const newMediaItems = await Promise.all(uploadPromises);
+      
+      setMediaFiles(prev => {
+        const totalFiles = prev.length + newMediaItems.length;
+        if (totalFiles > 10) {
+          setError(`Максимум 10 файлов в медиагруппе. Вы пытаетесь добавить ${totalFiles} файлов.`);
+          return prev;
+        }
+        setError(null);
+        return [...prev, ...newMediaItems];
+      });
+      
+    } catch (err) {
+      setError(`Ошибка загрузки файлов: ${err instanceof Error ? err.message : 'Неизвестная ошибка'}`);
+      console.error('Upload error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    handleFileUpload(e.dataTransfer.files);
+  };
+
+  const removeMediaFile = (index: number) => {
+    setMediaFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const updateMediaCaption = (index: number, caption: string) => {
+    setMediaFiles(prev => prev.map((item, i) => 
+      i === index ? { ...item, caption } : item
+    ));
+  };
+
+  const getMediaIcon = (type: MediaItem['media_type']) => {
+    switch (type) {
+      case 'photo': return <Image className="w-4 h-4" />;
+      case 'video': return <Video className="w-4 h-4" />;
+      case 'audio': return <Music className="w-4 h-4" />;
+      case 'voice': return <Mic className="w-4 h-4" />;
+      default: return <File className="w-4 h-4" />;
+    }
   };
 
   const handleViewDetails = async (broadcastId: string) => {
@@ -342,15 +491,40 @@ const Broadcast: React.FC = () => {
     setShowConfirmDialog(false);
 
     try {
+      // Если есть медиафайлы, текст сообщения становится подписью к первому файлу
+      let processedMediaFiles = mediaFiles;
+      if (mediaFiles.length > 0) {
+        processedMediaFiles = [...mediaFiles];
+        // Добавляем текст сообщения к подписи первого файла
+        if (processedMediaFiles[0]) {
+          const firstFile = processedMediaFiles[0];
+          const messageText = pendingBroadcast.message;
+          const existingCaption = firstFile.caption || '';
+          
+          // Объединяем текст сообщения с существующей подписью
+          let combinedCaption = messageText;
+          if (existingCaption) {
+            combinedCaption += '\n\n' + existingCaption;
+          }
+          
+          processedMediaFiles[0] = {
+            ...firstFile,
+            caption: combinedCaption
+          };
+        }
+      }
+
       const command: CreateBroadcastCommand = {
-        message: pendingBroadcast.message,
+        message: pendingBroadcast.message, // Всегда отправляем реальный текст
         message_type: pendingBroadcast.type,
-        selected_external_users: pendingBroadcast.users,
+        selected_external_users: pendingBroadcast.users, // Пользователи уже включают выбранных и из слотов
+        media_group: mediaFiles.length > 0 ? { media: processedMediaFiles } : undefined,
       };
 
       const response = await broadcastApi.create(command);
       setCurrentBroadcast(response);
       setMessage('');
+      setMediaFiles([]); // Очищаем медиафайлы после успешной отправки
       // Обновляем историю после создания новой рассылки
       loadBroadcastHistory();
     } catch (err) {
@@ -435,6 +609,100 @@ const Broadcast: React.FC = () => {
               placeholder="Введите сообщение для рассылки..."
               disabled={loading || !!currentBroadcast}
             />
+          </div>
+
+          {/* Загрузка медиафайлов */}
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Медиафайлы (опционально)
+            </label>
+            
+            {/* Предупреждение об ограничениях */}
+            <div className="mb-3 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+              <div className="flex">
+                <AlertTriangle className="w-5 h-5 text-yellow-600 mt-0.5 mr-2" />
+                <div className="text-sm text-yellow-800">
+                  <p className="font-medium">Ограничения медиагруппы:</p>
+                  <ul className="mt-1 list-disc list-inside space-y-1">
+                    <li>Максимум 10 файлов в одной группе</li>
+                    <li>Текст сообщения станет подписью к первому файлу</li>
+                    <li>Дополнительная подпись к первому файлу будет добавлена к тексту сообщения</li>
+                    <li>Все файлы будут отправлены как одно сообщение</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+            
+            {/* Область для drag & drop */}
+            <div
+              className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+                isDragOver 
+                  ? 'border-blue-500 bg-blue-50' 
+                  : 'border-gray-300 hover:border-gray-400'
+              }`}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+            >
+              <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+              <p className="text-sm text-gray-600 mb-2">
+                Перетащите файлы сюда или нажмите для выбора
+              </p>
+              <input
+                type="file"
+                multiple
+                accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt"
+                onChange={(e) => handleFileUpload(e.target.files)}
+                className="hidden"
+                id="media-upload"
+                disabled={loading || !!currentBroadcast}
+              />
+              <label
+                htmlFor="media-upload"
+                className="inline-flex items-center px-3 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 cursor-pointer disabled:opacity-50"
+              >
+                <Upload className="w-4 h-4 mr-2" />
+                Выбрать файлы
+              </label>
+            </div>
+
+            {/* Список загруженных файлов */}
+            {mediaFiles.length > 0 && (
+              <div className="mt-4 space-y-2">
+                <h4 className="text-sm font-medium text-gray-700">Загруженные файлы:</h4>
+                {mediaFiles.map((file, index) => (
+                  <div key={index} className="flex items-center space-x-3 p-3 bg-gray-50 rounded-md">
+                    {getMediaIcon(file.media_type)}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">
+                        {file.file_path}
+                      </p>
+                      <p className="text-xs text-gray-500 capitalize">
+                        {file.media_type}
+                      </p>
+                    </div>
+                    <input
+                      type="text"
+                      placeholder={index === 0 ? "Дополнительная подпись (к тексту сообщения)" : "Подпись (только к первому файлу)"}
+                      value={file.caption || ''}
+                      onChange={(e) => updateMediaCaption(index, e.target.value)}
+                      className={`flex-1 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 ${
+                        index > 0 ? 'bg-gray-100 text-gray-500' : ''
+                      }`}
+                      disabled={loading || !!currentBroadcast || index > 0}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeMediaFile(index)}
+                      className="p-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded"
+                      disabled={loading || !!currentBroadcast}
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="mb-4">
@@ -671,6 +939,120 @@ const Broadcast: React.FC = () => {
                 )}
               </div>
             )}
+            </div>
+          )}
+
+          {/* Выбор слотов */}
+          {!useManualIds && (
+            <div className="mb-4">
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-gray-700">
+                  Выбор слотов для рассылки
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setUseSlotSelection(!useSlotSelection)}
+                  className="text-sm text-blue-600 hover:text-blue-800"
+                  disabled={loading || !!currentBroadcast}
+                >
+                  {useSlotSelection ? 'Отключить' : 'Включить'} выбор по слотам
+                </button>
+              </div>
+            
+              {useSlotSelection && (
+                <div className="border border-gray-300 rounded-md p-4 bg-gray-50">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-sm text-gray-600">
+                      Выбрано слотов: {selectedSlotIds.length} из {slots.length}
+                    </span>
+                    <div className="space-x-2">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSlotIds(slots.map(slot => slot.id))}
+                        className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+                        disabled={slotsLoading}
+                      >
+                        Выбрать все
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSlotIds([])}
+                        className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
+                        disabled={slotsLoading}
+                      >
+                        Очистить
+                      </button>
+                    </div>
+                  </div>
+
+                  {slotsLoading ? (
+                    <div className="text-center py-4">
+                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mx-auto"></div>
+                      <p className="mt-2 text-sm text-gray-600">Загрузка слотов...</p>
+                    </div>
+                  ) : (
+                    <div className="max-h-60 overflow-y-auto space-y-2">
+                      {slots.length > 0 ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                          {slots.map(slot => {
+                            const slotBookings = bookings.filter(booking => booking.slot_id === slot.id);
+                            const isSelected = selectedSlotIds.includes(slot.id);
+                            
+                            return (
+                              <label key={slot.id} className="flex items-center p-2 bg-white rounded border hover:bg-green-50 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => {
+                                    if (isSelected) {
+                                      setSelectedSlotIds(prev => prev.filter(id => id !== slot.id));
+                                    } else {
+                                      setSelectedSlotIds(prev => [...prev, slot.id]);
+                                    }
+                                  }}
+                                  className="mr-2"
+                                  disabled={loading || !!currentBroadcast}
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-sm font-medium text-gray-900 truncate">
+                                    {slot.place}
+                                  </div>
+                                  <div className="text-xs text-gray-500">
+                                    {new Date(slot.time).toLocaleString('ru-RU')} • {slotBookings.length}/{slot.max_user} записей
+                                    {slotBookings.length >= slot.max_user && (
+                                      <span className="ml-1 text-red-600 font-medium">(занят)</span>
+                                    )}
+                                  </div>
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="text-center py-4 text-gray-500">
+                          <p className="text-sm">Слоты не найдены</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {selectedSlotIds.length > 0 && (
+                    <div className="mt-3 p-2 bg-green-50 border border-green-200 rounded">
+                      <p className="text-sm text-green-800">
+                        <strong>Выбрано слотов:</strong> {selectedSlotIds.length}
+                        <br />
+                        <strong>Пользователей в слотах:</strong> {getUsersBySelectedSlots().length}
+                        <br />
+                        <strong>Детали:</strong> {selectedSlotIds.map(slotId => {
+                          const slot = slots.find(s => s.id === slotId);
+                          const slotBookings = bookings.filter(b => b.slot_id === slotId);
+                          return slot ? `${slot.place} (${slotBookings.length}/${slot.max_user})` : '';
+                        }).filter(Boolean).join(', ')}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -1023,6 +1405,25 @@ const Broadcast: React.FC = () => {
                   <div className="bg-gray-50 p-2 rounded text-sm max-h-20 overflow-y-auto">
                     {pendingBroadcast.message}
                   </div>
+                </div>
+              )}
+              
+              {mediaFiles.length > 0 && (
+                <div className="mb-3">
+                  <p className="text-sm text-gray-600 mb-2"><strong>Медиафайлы ({mediaFiles.length}):</strong></p>
+                  <div className="bg-gray-50 p-2 rounded text-sm max-h-20 overflow-y-auto">
+                    {mediaFiles.map((file, index) => (
+                      <div key={index} className="flex items-center space-x-2 text-xs">
+                        {getMediaIcon(file.media_type)}
+                        <span className="truncate">{file.file_path}</span>
+                        {file.caption && index === 0 && <span className="text-blue-600">({file.caption})</span>}
+                        {index === 0 && <span className="text-xs text-blue-600 font-medium">[подпись]</span>}
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Подпись будет показана только с первым файлом в медиагруппе
+                  </p>
                 </div>
               )}
             </div>
